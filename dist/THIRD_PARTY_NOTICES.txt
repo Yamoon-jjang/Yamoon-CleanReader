@@ -1,0 +1,106 @@
+야문 클린리더 — 제3자 구성요소 고지 (Third-Party Notices)
+================================================================
+
+야문 클린리더(YamoonCleanReader.exe)는 MinGW-w64 GCC로 빌드되었으며,
+실행 파일 안에 아래 런타임 구성요소가 포함(정적 링크)되어 있습니다.
+각 라이선스가 요구하는 고지를 여기에 싣습니다.
+
+----------------------------------------------------------------
+1. GCC 런타임 라이브러리 (libstdc++, libgcc)
+----------------------------------------------------------------
+GNU General Public License v3 + GCC Runtime Library Exception 3.1.
+Runtime Library Exception에 따라 이 런타임을 포함한 프로그램은
+별도의 라이선스 조건 없이 배포할 수 있습니다.
+https://www.gnu.org/licenses/gcc-exception-3.1.html
+
+----------------------------------------------------------------
+2. mingw-w64 런타임
+----------------------------------------------------------------
+Copyright (c) 2009-2016 the mingw-w64 project
+License: Zope Public License (ZPL) 2.1
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+   1. Redistributions in source code must retain the accompanying
+      copyright notice, this list of conditions, and the following
+      disclaimer.
+   2. Redistributions in binary form must reproduce the accompanying
+      copyright notice, this list of conditions, and the following
+      disclaimer in the documentation and/or other materials provided
+      with the distribution.
+   3. Names of the copyright holders must not be used to endorse or
+      promote products derived from this software without prior
+      written permission from the copyright holders.
+   4. The right to distribute this software or to use it for any
+      purpose does not give you the right to use Servicemarks (sm) or
+      Trademarks (tm) of the copyright holders.  Use of them is
+      covered by separate agreement with the copyright holders.
+   5. If any files are modified, you must cause the modified files to
+      carry prominent notices stating that you changed the files and
+      the date of any change.
+
+Disclaimer
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+----------------------------------------------------------------
+3. mingw-w64 런타임 중 gdtoa / mingw_pformat
+----------------------------------------------------------------
+Copyright (c) 1997-2001 Lucent Technologies
+
+Permission to use, copy, modify, and distribute this software and
+its documentation for any purpose and without fee is hereby
+granted, provided that the above copyright notice appear in all
+copies and that both that the copyright notice and this
+permission notice and warranty disclaimer appear in supporting
+documentation, and that the name of Lucent or any of its entities
+not be used in advertising or publicity pertaining to
+distribution of the software without specific, written prior
+permission.
+
+LUCENT DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
+IN NO EVENT SHALL LUCENT OR ANY OF ITS ENTITIES BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+
+Copyright (c) 2004, 2005 David M. Gay
+
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted,
+provided that the above copyright notice appear in all copies and
+that both that the copyright notice and this permission notice and
+warranty disclaimer appear in supporting documentation, and that the
+name of the author or any of his current or former employers not be
+used in advertising or publicity pertaining to distribution of the
+software without specific, written prior permission.
+
+THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.  IN
+NO EVENT SHALL THE AUTHOR OR ANY OF HIS CURRENT OR FORMER EMPLOYERS
+BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY
+DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
+OF THIS SOFTWARE.
+
+----------------------------------------------------------------
+그 밖에 사용하는 GDI+, RichEdit(Msftedit), 공용 컨트롤 등은 Windows에 기본으로
+들어 있는 구성요소이며, 이 배포본에 포함되어 있지 않습니다.
+글꼴(맑은 고딕)도 Windows 기본 글꼴을 사용하며 배포본에 포함되어 있지 않습니다.

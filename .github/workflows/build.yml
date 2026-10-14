@@ -1,0 +1,96 @@
+name: Build Yamoon CleanReader (Windows)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write   # only used by the release step on main
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64 (GCC 13, win32 threads)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64
+          x86_64-w64-mingw32-g++-win32 --version | head -1
+          x86_64-w64-mingw32-g++-win32 --version | head -1 | grep -q ' 13' || { echo 'GCC 13 required'; exit 1; }
+      - name: Build YamoonCleanReader.exe
+        working-directory: src
+        run: |
+          set -e
+          BUILD_UTC=$(date -u +%s)
+          x86_64-w64-mingw32-windres app.rc -O coff -o app.res
+          x86_64-w64-mingw32-g++-win32 -O2 -std=c++17 -municode -mwindows -static -s \
+            -DBUILD_UTC=${BUILD_UTC}LL -DBUILD_SHA="\"${GITHUB_SHA}\"" \
+            -Wl,--stack,8388608 -Wl,--major-subsystem-version,6 -Wl,--minor-subsystem-version,0 \
+            -Wl,--major-os-version,6 -Wl,--minor-os-version,0 -Wl,--tsaware -Wl,--dynamicbase \
+            -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp app.res -o YamoonCleanReader.exe \
+            -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -lgdiplus -lole32 -ldwmapi -lshlwapi
+          echo "BUILD_UTC=${BUILD_UTC} ($(date -u -d @${BUILD_UTC} '+%Y-%m-%d %H:%M UTC')) SHA=${GITHUB_SHA:0:8}"
+      - name: Check the executable (imports, security flags, version info, no packing)
+        working-directory: src
+        run: |
+          set -e
+          EXE=YamoonCleanReader.exe
+          x86_64-w64-mingw32-objdump -p $EXE > pe.txt
+          grep 'DLL Name' pe.txt | awk '{print tolower($3)}' | sort > imports.txt
+          printf '%s\n' comctl32.dll comdlg32.dll gdi32.dll gdiplus.dll kernel32.dll msvcrt.dll ole32.dll shell32.dll shlwapi.dll user32.dll | sort > expected.txt
+          diff -u expected.txt imports.txt || { echo 'Unexpected DLL imports (only Windows system DLLs allowed)'; exit 1; }
+          grep -q 'DYNAMIC_BASE' pe.txt && grep -q 'NX_COMPAT' pe.txt && grep -q 'HIGH_ENTROPY_VA' pe.txt || { echo 'ASLR/DEP flags missing'; exit 1; }
+          grep -q 'TERMINAL_SERVICE_AWARE' pe.txt || { echo 'tsaware flag missing'; exit 1; }
+          if grep -aq 'UPX!' $EXE; then echo 'Packed executable is not allowed'; exit 1; fi
+          python3 - <<'PY'
+          data = open('YamoonCleanReader.exe', 'rb').read()
+          for word in ('FileDescription', 'ProductVersion', 'OriginalFilename'):
+              assert word.encode('utf-16-le') in data, word + ' missing from VERSIONINFO'
+          assert 'requestedExecutionLevel'.encode() in data and b'asInvoker' in data, 'manifest missing'
+          print('VERSIONINFO=PASS MANIFEST=PASS')
+          PY
+          echo "IMPORTS=PASS ($(wc -l < imports.txt) system DLLs)"
+          echo "SHA256 $(sha256sum $EXE | cut -d' ' -f1)  $EXE"
+      - name: Assemble portable folder
+        run: |
+          set -e
+          mkdir -p out/YamoonCleanReader
+          cp src/YamoonCleanReader.exe dist/README.txt dist/THIRD_PARTY_NOTICES.txt out/YamoonCleanReader/
+          cp LICENSE out/YamoonCleanReader/LICENSE.txt
+          cp -r dist/samples out/YamoonCleanReader/
+          ls -la out/YamoonCleanReader
+      - name: Upload portable folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: YamoonCleanReader-Windows-Portable
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub Release (new version on main only)
+        # If no release exists yet for kVersion in src/main.cpp and release notes for it
+        # exist, create the tag and the release. Existing releases are never touched.
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VER=$(grep -oP 'kVersion = L"\K[^"]+' src/main.cpp)
+          TAG="v${VER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "RELEASE_EXISTS=$TAG (skipped)"; exit 0; fi
+          NOTES=".github/release-notes/${TAG}.md"
+          if [ ! -f "$NOTES" ]; then echo "NO_RELEASE_NOTES=$NOTES (skipped)"; exit 0; fi
+          (cd out && zip -qr "../Yamoon-CleanReader-${TAG}-Windows.zip" YamoonCleanReader)
+          gh release create "$TAG" "Yamoon-CleanReader-${TAG}-Windows.zip" --target "$GITHUB_SHA" \
+            --title "야문 클린리더 ${TAG}" --notes-file "$NOTES"
+          echo "RELEASE_CREATED=$TAG"

@@ -1,0 +1,16 @@
+MinGW-w64 (GCC 13, win32 스레드 방식) 빌드 — src 폴더에서:
+  windres app.rc -O coff -o app.res
+  g++ -O2 -std=c++17 -municode -mwindows -static -s -Wl,--stack,8388608 -Wl,--major-subsystem-version,6 -Wl,--minor-subsystem-version,0 -Wl,--major-os-version,6 -Wl,--minor-os-version,0 -Wl,--tsaware -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp app.res -o YamoonCleanReader.exe -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -lgdiplus -lole32 -ldwmapi -lshlwapi
+
+  (리눅스에서 교차 빌드할 때는 x86_64-w64-mingw32-windres, x86_64-w64-mingw32-g++-win32 사용.
+   Ubuntu 24.04의 g++-mingw-w64-x86-64-win32 패키지가 GCC 13 win32 방식입니다.)
+
+정보 창의 빌드 표시:
+  GitHub Actions는 위 명령에 -DBUILD_UTC=<빌드 시각 UTC 초>LL -DBUILD_SHA="<커밋>" 을 더해
+  "2026-10-14 20:10 (현지 시간) · 커밋 앞 8자리" 형식으로 표시합니다. 직접 빌드하면 "개발본"으로 표시됩니다.
+
+백신 오진을 줄이기 위해 지키는 것:
+  - UPX 같은 실행 파일 압축(패킹)을 쓰지 않음
+  - 버전 정보(VERSIONINFO)와 매니페스트(asInvoker: 관리자 권한 요청 안 함)를 넣음
+  - DEP·ASLR(--nxcompat, --dynamicbase, --high-entropy-va) 켬
+  - 추가 DLL 없이 Windows 기본 DLL만 사용 (static 링크) — 빌드 때 가져오는 DLL 목록을 검사함

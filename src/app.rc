@@ -1,0 +1,30 @@
+#pragma code_page(65001)
+#include <windows.h>
+1 ICON "app.ico"
+1 RT_MANIFEST "app.manifest"
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 2,0,0,0
+PRODUCTVERSION 2,0,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "041204b0"
+    BEGIN
+      VALUE "CompanyName", "야문 짱"
+      VALUE "FileDescription", "야문 클린리더"
+      VALUE "ProductName", "야문 클린리더"
+      VALUE "FileVersion", "2.0.0"
+      VALUE "ProductVersion", "2.0"
+      VALUE "InternalName", "YamoonCleanReader"
+      VALUE "OriginalFilename", "YamoonCleanReader.exe"
+      VALUE "LegalCopyright", "Copyright (C) 2026 야문 짱. 야문 짱 & Claude 협동작."
+      VALUE "Comments", "흐트러진 텍스트 파일의 문단을 정리하고 편하게 읽는 프로그램"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x412, 1200
+  END
+END
