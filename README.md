@@ -2,10 +2,10 @@
 
 # 야문 클린리더
 
-**망가진 TXT를, 읽을 수 있는 책으로.**
+**정리하고, 바로 읽는다.**
 
-옛 모바일 txt, 한 줄로 뭉친 글, 웹에서 긁어 온 찌꺼기투성이 글을<br>
-문장 · 대사 · 장면 단위로 분석해 원래의 문단으로 되살리고, 그대로 책처럼 읽게 해 주는 Windows 프로그램
+망가진 TXT를 깨끗한 문단으로 되살리는 **정리기**와, 그 글을 책처럼 편하게 읽는 **리더기**를<br>
+하나의 프로그램에 담은 Windows 앱
 
 [![Release](https://img.shields.io/github/v/release/Yamoon-jjang/Yamoon-CleanReader?label=%EB%B0%B0%ED%8F%AC%EB%B3%B8&color=2f5aa8)](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest)
 ![Platform](https://img.shields.io/badge/Windows-7%20%7C%208%20%7C%2010%20%7C%2011-0078D6)
@@ -13,13 +13,28 @@
 ![Language](https://img.shields.io/badge/C%2B%2B17-Win32%20native-00599C)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-<img src="docs/screenshots/01-fixed-width.png" alt="옛 모바일용 40칸 고정폭 글을 문단으로 복원한 화면" width="100%">
-
-<sub>옛 모바일용 <b>40칸 고정폭</b> CP949 글 — 잘린 폭을 스스로 찾아내 문장을 잇고, 대사와 장면 전환(* * *)을 살려 문단으로 복원</sub>
-
 </div>
 
 ---
+
+## 정리기와 리더기, 한 창에서
+
+<table>
+<tr>
+<td width="50%" align="center"><b>정리 모드</b></td>
+<td width="50%" align="center"><b>읽기 모드</b></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/01-fixed-width.png" alt="정리 모드"></td>
+<td><img src="docs/screenshots/04-reading-sepia.png" alt="읽기 모드"></td>
+</tr>
+<tr>
+<td><sub>옛 모바일 txt, 한 줄로 뭉친 글, 웹에서 긁어 온 찌꺼기투성이 글을 문장 · 대사 · 장면 단위로 분석해 원래의 문단으로 되살립니다. (예: 40칸 고정폭으로 잘린 옛 모바일 글 복원)</sub></td>
+<td><sub>정리한 글을 그대로 이어서 읽습니다. (예: 세피아 배색 · 글자 14 · 넓은 줄 간격)<br> 글꼴 · 크기 · 배색 · 줄 간격을 내 눈에 맞추고, 클릭 한 번으로 쪽을 넘기고, 다시 열면 읽던 곳에서 이어집니다.</sub></td>
+</tr>
+</table>
+
+정리 프로그램 따로, 뷰어 따로 오갈 필요가 없습니다. 파일을 끌어다 놓으면 정리되고, **[읽기]** 버튼 하나면 정리된 글이 화면 가득 책으로 바뀝니다. 읽다가 다른 파일을 끌어다 놓아도 바로 정리해서 읽기 화면에 띄웁니다.
 
 ## 왜 클린리더인가
 
@@ -52,20 +67,17 @@
 
 <sub>문장부호 앞 공백 · 따옴표 안쪽 공백 36곳, 글자마다 띄어 쓴 글(<code>안 녕 하 세 요</code>) 복원, 쪽 번호 줄 제거, <code>&amp;nbsp;</code> <code>&amp;quot;</code> <code>&lt;br&gt;</code> 같은 HTML 찌꺼기 정리, 한 글자만 다음 줄로 넘어간 <code>뻗었 / 다 / .</code> 합치기</sub>
 
-### 정리한 글은 그대로 책처럼
+### 읽기 모드 — 오래 읽어도 편하게
 
-<table>
-<tr>
-<td width="50%"><img src="docs/screenshots/04-reading-sepia.png" alt="읽기 모드, 세피아 배색"></td>
-<td width="50%"><img src="docs/screenshots/05-reading-night.png" alt="읽기 모드, 저녁 앰버 배색"></td>
-</tr>
-<tr>
-<td align="center"><sub>읽기 모드 · 세피아 · 글자 14 · 넓은 줄 간격</sub></td>
-<td align="center"><sub>읽기 모드 · 저녁(앰버) · 어두운 테마</sub></td>
-</tr>
-</table>
+<img src="docs/screenshots/05-reading-night.png" alt="읽기 모드, 저녁 앰버 배색과 어두운 테마" width="100%">
 
-글의 아래쪽을 클릭하면 다음 쪽, 위쪽을 클릭하면 앞쪽. 화면 맨 아래 줄이 다음 쪽의 맨 위 줄이 되어 읽던 줄을 놓치지 않고, 다시 열면 **읽던 곳으로 돌아갑니다.** 목차 · 책갈피 · 찾기 · 전체 화면(F11)까지 갖췄습니다.
+<sub>읽기 모드 · 저녁(앰버) 배색 · 어두운 테마</sub>
+
+- **쪽 넘김** — 글의 아래쪽을 클릭하면 다음 쪽, 위쪽을 클릭하면 앞쪽. 화면 맨 아래 줄이 다음 쪽의 맨 위 줄이 되어 읽던 줄을 놓치지 않습니다. Space · Page Down도 됩니다.
+- **읽던 곳 기억** — 파일마다 읽던 위치를 기억해, 다시 열면 그곳으로 돌아갑니다. 지금까지 읽은 양은 %로 표시됩니다.
+- **목차 · 책갈피 · 찾기** — "제1화", "프롤로그" 같은 회차 제목을 찾아 목차를 만들고, 파일마다 책갈피를 남깁니다.
+- **눈이 편한 화면** — 배색 8가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 …)와 사용자 지정 색, 글꼴 · 크기 · 줄 간격 · 여백 조절, Ctrl+휠로 글자 크기.
+- **전체 화면(F11)** — 도구줄을 모두 숨기고 글만 화면 가득. 큰 글도 처음부터 끝까지 이어서 읽습니다.
 
 ## 주요 기능
 
