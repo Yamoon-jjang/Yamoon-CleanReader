@@ -1445,18 +1445,20 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             if (lines[i].gap != 1) { ++i; continue; }
             int begin = i;
             while (i < n && lines[i].gap == 1) ++i;
-            int eligible = 0, unfinished = 0;
+            int eligible = 0, unfinished = 0, completed = 0;
             for (int j = begin; j < i; ++j) {
                 const Line& a = lines[j - 1], &b = lines[j];
                 if (a.sym || b.sym || a.head || b.head || isOpenQuote(firstVis(b.t))) continue;
                 ++eligible;
+                if (endKind(a.t) == 2) ++completed;
                 if (endKind(a.t) == 0 && a.w >= 8 && a.w <= 140 &&
                     isLetterDigit(firstVis(b.t))) ++unfinished;
             }
             // 고립된 미완성 문단이나 시·짧은 대사를 전부 합치지 않도록
             // 최소 8경계, 그중 적어도 4개의 문장 중간 줄바꿈을 요구한다.
+            // 의도적으로 행을 나눈 시·가사(종결 문장이 드문 형태)는 제외한다.
             if (i - begin < 8 || eligible < 8 || unfinished < 4 ||
-                unfinished * 10 < eligible * 3) continue;
+                completed < 2 || unfinished * 10 < eligible * 3) continue;
             for (int j = begin; j < i; ++j) {
                 const Line& a = lines[j - 1], &b = lines[j];
                 if (!a.sym && !b.sym && !a.head && !b.head &&
