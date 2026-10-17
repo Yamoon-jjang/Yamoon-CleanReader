@@ -72,7 +72,7 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnRules, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.0";
+static const wchar_t* kVersion = L"2.1";
 static const wchar_t* kDate = L"2026년 10월 13일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.

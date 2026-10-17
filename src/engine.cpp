@@ -142,6 +142,9 @@ struct Line {
     int rw = 0;         // 앞 공백 포함 원래 폭(고정폭 판정용)
     bool head = false, sym = false;
     bool afterJunk = false;  // 바로 앞에서 쪽 번호·광고 줄을 지웠음 (그 간격은 장면 전환이 아님)
+    bool dz = false;    // 이 줄 뒤의 빈 줄 1개는 문단 구분이 아니라 끊긴 줄 사이 (글 일부만 "줄마다 빈 줄"인 구간)
+    bool lj = false;    // 이 줄 둘레에 끊긴 줄이 많음 (글 일부만 끊긴 구간): 글 전체 판정과 상관없이 이음
+    int  run = 0;       // 빈 줄 없이 이어진 줄 묶음의 줄 수
 };
 
 // ---------- 문장 나누기 ----------
@@ -1438,10 +1441,75 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     else if (opt.blankMode == 0) dbl = tot >= 6 && c1 >= tot * 0.6 && c0 * 10 <= tot;  // 거의 모든 줄 사이가 빈 줄 (빈 줄 없는 줄바꿈이 섞여 있으면 아님)
     std::vector<char> brk(n, 1);  // i번 줄 앞이 문단 경계인가
     for (int i = 1; i < n; ++i) brk[i] = dbl ? (lines[i].gap >= 2) : (lines[i].gap >= 1);
+    // 글 일부만 "줄마다 빈 줄"로 끊긴 경우: 글 전체로는 판정되지 않으므로 구간별로 찾음.
+    // 빈 줄을 사이에 둔 줄들이 이어지는 구간에서, 둘레(앞뒤 12줄)의 줄 끝이 문장 중간에서 끊긴 것이 많으면
+    // 그 구간의 빈 줄 1개는 문단 구분이 아니라 끊긴 줄 사이로 봄 (끝난 문장 뒤의 빈 줄은 그대로 문단 구분)
+    int zoneGaps = 0;
+    if (!dbl && opt.blankMode == 0 && opt.joinMode == 0 && !listLike) {
+        const int K = 12;
+        int s = 0;
+        while (s < n) {
+            int e = s;
+            while (e + 1 < n && lines[e + 1].gap >= 1) ++e;
+            if (e - s + 1 >= 6) {
+                // k줄 뒤가 빈 줄 1개인 후보와 그중 끝나지 않은 줄의 누적 수
+                std::vector<int> pc(e - s + 2, 0), pu(e - s + 2, 0);
+                for (int k = s; k <= e; ++k) {
+                    bool c = k < e && lines[k + 1].gap == 1 && !lines[k].head && !lines[k].sym;
+                    pc[k - s + 1] = pc[k - s] + (c ? 1 : 0);
+                    pu[k - s + 1] = pu[k - s] + (c && endKind(lines[k].t) == 0 ? 1 : 0);
+                }
+                for (int k = s; k < e; ++k) {
+                    if (lines[k + 1].gap != 1) continue;
+                    int a = std::max(s, k - K) - s, b = std::min(e, k + K + 1) - s;
+                    int c = pc[b] - pc[a], u = pu[b] - pu[a];
+                    if (c >= 4 && u >= 3 && u * 10 >= c * 3) lines[k].dz = true;
+                }
+            }
+            s = e + 1;
+        }
+    }
+    // 빈 줄 없이 이어진 줄 묶음의 크기
+    for (int i = 0; i < n;) {
+        int j = i + 1;
+        while (j < n && lines[j].gap == 0) ++j;
+        for (int k = i; k < j; ++k) lines[k].run = j - i;
+        i = j;
+    }
+    // 같은 짧은 줄이 두 번 잇달아 나오면 제목 ("내 몸과의 생소한 만남" / "내 몸과의 생소한 만남")
+    // 끊긴 구간의 첫 줄이 짧고 문장이 끝나지 않았으며 조사·쉼표로 끝나지도 않으면 제목
+    if (!listLike) {
+        static const S contEnd = U"게서로를을이가은는의와과고며면도만께에한인된던할및든나랑";
+        for (int i = 0; i + 1 < n; ++i) {
+            const Line &a = lines[i], &b = lines[i + 1];
+            if (a.sym || b.sym || a.w > 40 || endKind(a.t) != 0 || isOpenQuote(firstVis(a.t))) continue;
+            if (visText(a.t) == visText(b.t)) { lines[i].head = lines[i + 1].head = true; continue; }
+            bool zoneStart = a.dz && (i == 0 || !(lines[i - 1].dz && a.gap == 1));
+            C x = lastVis(a.t);
+            if (zoneStart && !a.head && x != ',' && x != 0xFF0C && !(isHangulSyl(x) && contEnd.find(x) != S::npos) &&
+                (i == 0 || endKind(lines[i - 1].t) != 0 || lines[i - 1].head || lines[i - 1].sym))
+                lines[i].head = true;
+        }
+    }
+    // 끊긴 줄 구간 확정: 끝나지 않은 줄들이 이어지다 문장부호로 끝나는 줄(~다. ~가? 등)에서 마무리되어야 끊긴 글.
+    // 끝내 문장이 끝나지 않는 짧은 줄들(빈 줄 사이에 쓴 시·노래 가사 등)은 그대로 둠
+    for (int i = 0; i < n; ++i) {
+        if (!lines[i].dz) continue;
+        auto open = [&](int k) { return lines[k].dz && !lines[k].head && !lines[k].sym && endKind(lines[k].t) == 0 && k + 1 < n && lines[k + 1].gap == 1; };
+        if (!open(i)) { lines[i].dz = false; continue; }
+        int j = i;
+        while (j < n && open(j)) ++j;  // j: 사슬의 마지막 줄 (여기서 문장이 끝나야 함)
+        bool ok = j < n && j - i <= 10 && !lines[j].head && !lines[j].sym && endKind(lines[j].t) == 2;
+        for (int k = i; k < j; ++k) lines[k].dz = ok;
+        if (j < n) lines[j].dz = false;
+        i = j;
+    }
+    for (int i = 1; i < n; ++i) if (lines[i - 1].dz && lines[i].gap == 1) { brk[i] = 0; zoneGaps++; }
     // 빈 줄로 문단을 나누고, 문단 안에서는 줄만 바꾼 글: 문단 안의 줄바꿈은 결과에서도 줄바꿈만 (빈 줄 없이)
+    // (끊긴 줄 사이로 본 빈 줄은 문단 구분으로 세지 않음)
     int blankSeps = 0;
-    for (int i = 1; i < n; ++i) if (lines[i].gap >= 1) blankSeps++;
-    bool blockStyle = !dbl && blankSeps >= 2 && blankSeps >= tot * 0.15 && c0 >= 2;
+    for (int i = 1; i < n; ++i) if (lines[i].gap >= 1 && brk[i]) blankSeps++;
+    bool blockStyle = !dbl && blankSeps >= 2 && blankSeps >= (tot - zoneGaps) * 0.15 && c0 >= 2;
 
     // 3) 고정폭 줄바꿈 감지
     std::vector<int> ws;
@@ -1526,6 +1594,20 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (endKind(lines[i].t) == 0) unterm++;
     }
     bool joinAllowed = opt.joinMode == 0 && (cand < 10 || unterm >= cand * 0.15);
+    // 글 전체로는 끊긴 줄이 적어도, 끊긴 줄이 몰려 있는 구간(앞뒤 15줄 안팎)은 이음
+    if (opt.joinMode == 0 && !listLike) {
+        std::vector<int> ci2;
+        for (int i = 0; i + 1 < n; ++i) if (!brk[i + 1] && !lines[i].head && !lines[i].sym) ci2.push_back(i);
+        int m = (int)ci2.size();
+        std::vector<int> pu(m + 1, 0);
+        for (int k = 0; k < m; ++k) pu[k + 1] = pu[k] + (endKind(lines[ci2[k]].t) == 0 ? 1 : 0);
+        const int K = 15;
+        for (int k = 0; k < m; ++k) {
+            int a = std::max(0, k - K), b = std::min(m, k + K + 1);
+            int c = b - a, u = pu[b] - pu[a];
+            if (u >= 3 && u * 10 >= c * 3) lines[ci2[k]].lj = true;
+        }
+    }
 
     // 머리글·출처처럼 문장이 아닌 줄: "제목 - 작가" 줄, 주소(URL)로 끝나는 줄
     auto notSentence = [&](const Line& L) {
@@ -1576,6 +1658,8 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (yPunct && !b.sym) return true;
         // 여는 따옴표/괄호로 끝난 줄: "“\n안녕"
         if (x == 0x201C || x == 0x2018 || x == 0x300C || x == 0x300E || x == '(' || x == '[') return true;
+        // 글 일부만 "줄마다 빈 줄"로 끊긴 구간: 문장이 끝나지 않은 줄은 이음
+        if (a.dz && b.gap == 1) return endKind(a.t) == 0;
         if (wrap) return isFull(a, &b);
         // 빈 줄로 문단을 나눈 글에서 문단 안의 줄바꿈은 작가가 일부러 한 것 (시·노래 가사·편지 등):
         // 조사·연결 어미로 끝난 줄(위에서 처리)만 잇고 나머지는 그대로 둠
@@ -1585,13 +1669,15 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             while (k < bv.size() && isHangulSyl(bv[k])) ++k;
             bool rest = true;
             for (size_t q = k; q < bv.size(); ++q) if (!isTermChar(bv[q]) && !isCloseQuote(bv[q])) rest = false;
-            if (joinAllowed && k == 1 && rest && isHangulSyl(lastVis(a.t)) && endKind(a.t) == 0) return true;
+            if ((joinAllowed || a.lj) && k == 1 && rest && isHangulSyl(lastVis(a.t)) && endKind(a.t) == 0) return true;
             // 긴 줄(또는 줄 안에서 문장이 끝난 줄)이 문장 중간에서 끊긴 것은 이음 — 짧은 줄만 이어진 시·편지는 그대로
+            // 빈 줄 없이 길게(8줄 이상) 이어진 묶음에 끊긴 줄이 몰려 있으면 시·편지가 아니라 끊긴 글
+            if (a.lj && a.run >= 8 && b.gap == 0) return endKind(a.t) == 0;
             bool innerEnd = false;
             for (size_t q = 0; q + 1 < a.t.size(); ++q) if (isTermChar(a.t[q]) && isWS(a.t[q + 1])) { innerEnd = true; break; }
-            return joinAllowed && endKind(a.t) == 0 && (a.w >= 30 || innerEnd);
+            return (joinAllowed || a.lj) && endKind(a.t) == 0 && (a.w >= 30 || innerEnd);
         }
-        return joinAllowed && endKind(a.t) == 0;
+        return (joinAllowed || a.lj) && endKind(a.t) == 0;
     };
     auto joinSep = [&](const Line& a, const Line& b) -> S {
         if (opt.spaceMode == 1) return U" ";
