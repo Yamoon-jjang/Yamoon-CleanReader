@@ -1436,8 +1436,39 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     bool dbl = false;
     if (opt.blankMode == 2) dbl = true;
     else if (opt.blankMode == 0) dbl = tot >= 6 && c1 >= tot * 0.6 && c0 * 10 <= tot;  // 거의 모든 줄 사이가 빈 줄 (빈 줄 없는 줄바꿈이 섞여 있으면 아님)
+    // 자동 모드에서만: 한 파일 안에 정상 문단과 빈 줄을 사이에 둔 잘린 줄이
+    // 섞일 수 있다. 전체 파일 통계가 dbl=false여도, 주변에 연속된 잘림
+    // 증거가 충분한 경계만 국소적으로 복원한다. 다른 문단 경계는 그대로 둔다.
+    std::vector<char> localDoubleGap(n, 0);
+    if (opt.blankMode == 0 && !dbl && !listLike) {
+        for (int i = 1; i < n; ) {
+            if (lines[i].gap != 1) { ++i; continue; }
+            int begin = i;
+            while (i < n && lines[i].gap == 1) ++i;
+            int eligible = 0, unfinished = 0;
+            for (int j = begin; j < i; ++j) {
+                const Line& a = lines[j - 1], &b = lines[j];
+                if (a.sym || b.sym || a.head || b.head || isOpenQuote(firstVis(b.t))) continue;
+                ++eligible;
+                if (endKind(a.t) == 0 && a.w >= 8 && a.w <= 140 &&
+                    isLetterDigit(firstVis(b.t))) ++unfinished;
+            }
+            // 고립된 미완성 문단이나 시·짧은 대사를 전부 합치지 않도록
+            // 최소 8경계, 그중 적어도 4개의 문장 중간 줄바꿈을 요구한다.
+            if (i - begin < 8 || eligible < 8 || unfinished < 4 ||
+                unfinished * 10 < eligible * 3) continue;
+            for (int j = begin; j < i; ++j) {
+                const Line& a = lines[j - 1], &b = lines[j];
+                if (!a.sym && !b.sym && !a.head && !b.head &&
+                    !isOpenQuote(firstVis(b.t)) && endKind(a.t) == 0 &&
+                    a.w >= 8 && a.w <= 140 && isLetterDigit(firstVis(b.t)))
+                    localDoubleGap[j] = 1;
+            }
+        }
+    }
     std::vector<char> brk(n, 1);  // i번 줄 앞이 문단 경계인가
-    for (int i = 1; i < n; ++i) brk[i] = dbl ? (lines[i].gap >= 2) : (lines[i].gap >= 1);
+    for (int i = 1; i < n; ++i)
+        brk[i] = dbl ? (lines[i].gap >= 2) : (lines[i].gap >= 1 && !localDoubleGap[i]);
     // 빈 줄로 문단을 나누고, 문단 안에서는 줄만 바꾼 글: 문단 안의 줄바꿈은 결과에서도 줄바꿈만 (빈 줄 없이)
     int blankSeps = 0;
     for (int i = 1; i < n; ++i) if (lines[i].gap >= 1) blankSeps++;
@@ -1537,7 +1568,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         S last = sp == S::npos ? v : v.substr(sp + 1);
         return startsWithCI(last, "http") || startsWithCI(last, "www.");
     };
-    auto shouldJoin = [&](const Line& a, const Line& b) {
+    auto shouldJoin = [&](const Line& a, const Line& b, bool localGap) {
         if (opt.joinMode == 1 || listLike) return false;
         {   // 줄 전체가 문장부호 하나뿐: "뻗었다\n." / "안녕\n?"
             bool allP = !b.t.empty() && b.t.size() <= 3;
@@ -1567,7 +1598,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 (centered ? vis >= 8 : (vis >= 12 && words >= 3)))
                 return true;
         }
-        if (indentMarks && b.lead >= indentMin) return false;
+        if (indentMarks && b.lead >= indentMin && !(localGap && b.lead == 1)) return false;
         C x = lastVis(a.t), y = firstVis(b.t);
         if (x == ',' || x == 0xFF0C || x == 0x3001) return true;
         // 줄 첫머리가 문장부호: "했다\n." / "그래\n?" / "안녕\n”"
@@ -1576,10 +1607,10 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (yPunct && !b.sym) return true;
         // 여는 따옴표/괄호로 끝난 줄: "“\n안녕"
         if (x == 0x201C || x == 0x2018 || x == 0x300C || x == 0x300E || x == '(' || x == '[') return true;
-        if (wrap) return isFull(a, &b);
+        if (wrap && !localGap) return isFull(a, &b);
         // 빈 줄로 문단을 나눈 글에서 문단 안의 줄바꿈은 작가가 일부러 한 것 (시·노래 가사·편지 등):
         // 조사·연결 어미로 끝난 줄(위에서 처리)만 잇고 나머지는 그대로 둠
-        if (blockStyle) {
+        if (blockStyle && !localGap) {
             // 한 글자만 다음 줄로 넘어간 것("뻗었 / 다.")은 이음
             S bv = visText(b.t); size_t k = 0;
             while (k < bv.size() && isHangulSyl(bv[k])) ++k;
@@ -1591,7 +1622,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             for (size_t q = 0; q + 1 < a.t.size(); ++q) if (isTermChar(a.t[q]) && isWS(a.t[q + 1])) { innerEnd = true; break; }
             return joinAllowed && endKind(a.t) == 0 && (a.w >= 30 || innerEnd);
         }
-        return joinAllowed && endKind(a.t) == 0;
+        return (joinAllowed || localGap) && endKind(a.t) == 0;
     };
     auto joinSep = [&](const Line& a, const Line& b) -> S {
         if (opt.spaceMode == 1) return U" ";
@@ -1623,7 +1654,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         Para cur{lineTM(lines[0]), lines[0].sym ? 2 : lines[0].head ? 1 : 0, 0};
         int parts = 1;
         for (int i = 1; i < n; ++i) {
-            if (!brk[i] && shouldJoin(lines[i - 1], lines[i])) {
+            if (!brk[i] && shouldJoin(lines[i - 1], lines[i], localDoubleGap[i] != 0)) {
                 cur.x.add(joinSep(lines[i - 1], lines[i]), lines[i].m[0]);
                 cur.x.add(lineTM(lines[i]));
                 parts++;
