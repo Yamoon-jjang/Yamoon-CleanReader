@@ -28,6 +28,11 @@ jobs:
       contents: write   # only used by the release step on main
     steps:
       - uses: actions/checkout@v4
+      - name: Regression test (mixed-format novels)
+        run: |
+          set -e
+          g++ -O2 -std=c++17 -Wall -Wextra tests/test_mixed_format.cpp src/engine.cpp -o /tmp/cleanreader-regressions
+          /tmp/cleanreader-regressions
       - name: Install MinGW-w64 (GCC 13, win32 threads)
         run: |
           sudo apt-get update -q
