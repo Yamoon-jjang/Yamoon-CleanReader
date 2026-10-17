@@ -33,6 +33,18 @@ jobs:
           set -e
           g++ -O2 -std=c++17 -Wall -Wextra tests/test_mixed_format.cpp src/engine.cpp -o /tmp/cleanreader-regressions
           /tmp/cleanreader-regressions
+      - name: Verify unchanged behavior on existing samples
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          git fetch --depth=1 origin main
+          git show origin/main:src/engine.cpp > /tmp/cleanreader-baseline.cpp
+          g++ -O2 -std=c++17 -Isrc tests/diff_existing_samples.cpp /tmp/cleanreader-baseline.cpp -o /tmp/cleanreader-before
+          g++ -O2 -std=c++17 -Isrc tests/diff_existing_samples.cpp src/engine.cpp -o /tmp/cleanreader-after
+          /tmp/cleanreader-before > /tmp/cleanreader-before.txt
+          /tmp/cleanreader-after > /tmp/cleanreader-after.txt
+          cmp /tmp/cleanreader-before.txt /tmp/cleanreader-after.txt
+          echo 'Existing sample outputs: byte-for-byte identical in all 63 options'
       - name: Install MinGW-w64 (GCC 13, win32 threads)
         run: |
           sudo apt-get update -q
