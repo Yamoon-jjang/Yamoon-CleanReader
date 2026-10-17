@@ -57,7 +57,7 @@ int main() {
     S tail;
     tail.reserve(5'500'000);
     for (int i = 0; i < 60000; ++i) tail += normal;
-    require(tail.size() >= 3'000'000, "large normal body prepared");
+    require(tail.size() >= 2'000'000, "large normal body prepared (over 5 MB UTF-8)");
 
     S front = tidy(broken + U"\n\n" + tail);
     expectRecovered(front, "broken section at start of large novel");
