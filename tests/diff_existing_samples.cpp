@@ -1,6 +1,7 @@
 // Byte-for-byte differential check against main for established sample fixtures.
 #include "engine.h"
 #include <codecvt>
+#include <iconv.h>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -21,7 +22,24 @@ int main() {
         std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         std::u32string input;
         try { input = utf8.from_bytes(bytes); }
-        catch (...) { std::cerr << "Cannot decode " << path << '\n'; return 1; }
+        catch (...) {
+            // Several legacy fixtures deliberately use a Korean Windows code page.
+            iconv_t converter = iconv_open("UTF-8", "CP949");
+            if (converter == (iconv_t)-1) { std::cerr << "CP949 codec missing\n"; return 1; }
+            std::string decoded(bytes.size() * 4 + 16, '\0');
+            char* in = bytes.data();
+            size_t remainingIn = bytes.size();
+            char* out = decoded.data();
+            size_t remainingOut = decoded.size();
+            size_t status = iconv(converter, &in, &remainingIn, &out, &remainingOut);
+            iconv_close(converter);
+            if (status == (size_t)-1 || remainingIn != 0) {
+                std::cerr << "Cannot decode as UTF-8 or CP949: " << path << '\n';
+                return 1;
+            }
+            decoded.resize(decoded.size() - remainingOut);
+            input = utf8.from_bytes(decoded);
+        }
         for (int mode = 0; mode < 7; ++mode) {
             TidyOptions options;
             switch (mode) {
