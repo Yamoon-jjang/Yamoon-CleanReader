@@ -384,6 +384,19 @@ static void ScrollToChar(HWND h, long c) {
         if ((long)SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0) == first) break;  // 더 갈 수 없음
     }
 }
+// 정리 모드의 줄 높이(twips): 글꼴 본래 높이로 고정해 원본 칸과 결과 칸이 똑같은 줄 간격이 되게 함
+// (줄 안에 기본 글꼴에 없는 글자·보이지 않는 서식 문자가 있으면 Windows가 다른 글꼴을 빌려 그 줄만 높아지는 것을 막음)
+static LONG EditLineTwips(HWND h, HFONT f) {
+    if (!f) return 0;
+    HDC dc = GetDC(h);
+    HGDIOBJ old = SelectObject(dc, f);
+    TEXTMETRICW tm = {};
+    BOOL ok = GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(h, dc);
+    if (!ok || tm.tmHeight <= 0) return 0;
+    return MulDiv(tm.tmHeight, 1440, g_dpi);
+}
 // 글자색·바탕색·줄 간격 (보던 위치와 선택은 그대로)
 // 정리 모드는 늘 기본 모양(흰 바탕), 보기 설정은 읽기 모드의 결과 창에만
 static void ApplyEditLook(HWND h) {
@@ -406,16 +419,22 @@ static void ApplyEditLook(HWND h) {
     SendMessageW(h, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
     PARAFORMAT2 pf = {};
     pf.cbSize = sizeof(pf);
-    pf.dwMask = PFM_SPACEAFTER;  // 줄(문단) 뒤 여백: 글자 크기에 비례
+    pf.dwMask = PFM_SPACEAFTER | PFM_LINESPACING;  // 줄(문단) 뒤 여백: 글자 크기에 비례
     int lsp = view ? kLineSp[(g_vLine >= 0 && g_vLine < 4) ? g_vLine : 0] : 0;  // 줄 간격은 읽기 모드에서만
     pf.dySpaceAfter = g_vSize * 20 * lsp / 100;  // twips
-    static LONG lastSp[2] = {0, 0};                // 창마다 마지막으로 준 값 (바뀔 때만 전체에 적용: 큰 글에서 빠르게)
+    // 정리 모드: 줄 높이를 글꼴 높이로 고정 (원본·결과 칸이 같은 간격). 읽기 모드는 예전처럼 한 줄 간격
+    LONG fixedLine = view ? 0 : EditLineTwips(h, EditFontOf(h));
+    pf.bLineSpacingRule = fixedLine > 0 ? 4 : 0;  // 4: 정확히 dyLineSpacing
+    pf.dyLineSpacing = fixedLine;
+    static LONG lastSp[2] = {0, 0}, lastLs[2] = {-1, -1};  // 창마다 마지막으로 준 값 (바뀔 때만 전체에 적용: 큰 글에서 빠르게)
     LONG& last = lastSp[h == g_dst ? 1 : 0];
-    if (pf.dySpaceAfter != last || RichLen(h) == 0) {  // 바뀌었을 때만 (빈 글에서는 늘 정해 둠)
+    LONG& lastL = lastLs[h == g_dst ? 1 : 0];
+    if (pf.dySpaceAfter != last || fixedLine != lastL || RichLen(h) == 0) {  // 바뀌었을 때만 (빈 글에서는 늘 정해 둠)
         SendMessageW(h, EM_SETSEL, 0, -1);
         SendMessageW(h, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
         SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
         last = pf.dySpaceAfter;
+        lastL = fixedLine;
     }
     ScrollToChar(h, top);
     SendMessageW(h, WM_SETREDRAW, TRUE, 0);
@@ -1180,7 +1199,8 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
     for (int k = 0; k < kFbCount; ++k)
         if (used[k]) rtf += "{\\f" + std::to_string(k + 1) + "\\fnil\\fcharset" + std::to_string((int)kFallbackFonts[k].charset) + " " + std::string(kFallbackFonts[k].face, kFallbackFonts[k].face + wcslen(kFallbackFonts[k].face)) + ";}";  // 후보 이름은 모두 영문
     rtf += "}{\\colortbl;\\red" + std::to_string(GetRValue(def.crTextColor)) + "\\green" + std::to_string(GetGValue(def.crTextColor)) + "\\blue" +
-           std::to_string(GetBValue(def.crTextColor)) + ";}\\pard\\sa" + std::to_string(pf.dySpaceAfter) + "\\plain\\f0\\fs" +
+           std::to_string(GetBValue(def.crTextColor)) + ";}\\pard\\sa" + std::to_string(pf.dySpaceAfter) +
+           (pf.bLineSpacingRule == 4 && pf.dyLineSpacing > 0 ? "\\sl-" + std::to_string(pf.dyLineSpacing) + "\\slmult0" : std::string()) + "\\plain\\f0\\fs" +
            std::to_string(halfPt) + "\\cf1 " + body + "}";
     RtfSrc src = {&rtf, 0};
     EDITSTREAM es = {(DWORD_PTR)&src, 0, RtfReadCb};
