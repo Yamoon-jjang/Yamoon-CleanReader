@@ -1624,7 +1624,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         }
         return (joinAllowed || localGap) && endKind(a.t) == 0;
     };
-    auto joinSep = [&](const Line& a, const Line& b) -> S {
+    auto joinSep = [&](const Line& a, const Line& b, bool localGap) -> S {
         if (opt.spaceMode == 1) return U" ";
         if (opt.spaceMode == 2) return U"";
         C x = lastVis(a.t), y = firstVis(b.t);
@@ -1642,7 +1642,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (isKanaHan(x) && isKanaHan(y)) return U"";
         if (a.sym && b.sym) return U" ";
         if (a.trail || b.lead > 0) return U" ";
-        if (cut) return U"";
+        if (cut && !localGap) return U"";
         return U" ";
     };
 
@@ -1655,7 +1655,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         int parts = 1;
         for (int i = 1; i < n; ++i) {
             if (!brk[i] && shouldJoin(lines[i - 1], lines[i], localDoubleGap[i] != 0)) {
-                cur.x.add(joinSep(lines[i - 1], lines[i]), lines[i].m[0]);
+                cur.x.add(joinSep(lines[i - 1], lines[i], localDoubleGap[i] != 0), lines[i].m[0]);
                 cur.x.add(lineTM(lines[i]));
                 parts++;
                 R.joined = true;
