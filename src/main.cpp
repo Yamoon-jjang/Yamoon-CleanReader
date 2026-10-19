@@ -1612,44 +1612,86 @@ struct ProcJob {
 };
 static void AfterTextChange();
 
-// 결과 창의 맨 위 글자 위치
-static long GlobalTop() { return TopChar(g_dst); }
-static void GoToGlobal(long idx) { ScrollToChar(g_dst, idx < 0 ? 0 : idx); }
 // ---- 읽기 모드 큰 글 이어 넣기
-// 정리 모드처럼 앞부분을 먼저 넣어 바로 읽을 수 있게 하고, 나머지는 타이머로 조금씩 끝에 이어 붙임.
+// 정리 모드처럼 지금 읽을 곳 둘레만 먼저 넣어 바로 읽을 수 있게 하고, 나머지는 타이머로 조금씩
+// 뒷부분은 끝에, 앞부분은 처음에 이어 붙임 (창이 멈추지 않게 작은 조각으로).
 // 저장·복사·찾기·목차/책갈피로 먼 곳 이동·모드 전환처럼 글 전체가 필요한 일은 남은 글을 먼저 다 넣고 함.
 static wstring g_fillSrc;          // 결과 칸에 들어갈 글 전체 (원래 글자, 줄 끝 CRLF)
-static size_t g_fillAt = 0;        // g_fillSrc에서 넣은 곳까지
+static size_t g_fillAt = 0;        // 뒷부분: g_fillSrc에서 넣은 곳의 끝
+static size_t g_fillHeadEnd = 0;   // 앞부분: g_fillSrc[0, 여기)는 아직 넣지 않음
+static long g_fillHeadCp = 0;      // 아직 넣지 않은 앞부분의 글 칸 글자 수 (칸 안 위치 + 이것 = 글 전체 위치)
 static long g_fillTotalCp = 0;     // 다 넣었을 때의 글 칸 글자 수 (읽은 % 계산용)
 static const size_t kFillFirst = 300000;  // 처음에 넣는 양 (글자)
-static const size_t kFillChunk = 150000;  // 한 번에 이어 넣는 양
+static const size_t kFillChunk = 60000;   // 한 번에 이어 넣는 양 (작게: 넣는 동안 창이 멈춘 듯 보이지 않게)
+static const UINT kFillGapMs = 25;        // 조각 사이 쉬는 시간
+// 결과 창의 맨 위 글자 위치 (글 전체 기준)
+static long GlobalTop() { return TopChar(g_dst) + (g_fillPending ? g_fillHeadCp : 0); }
+static void GoToGlobal(long idx) {
+    if (idx < 0) idx = 0;
+    if (g_fillPending) {  // 아직 넣지 않은 곳이면 먼저 다 넣음
+        long rel = idx - g_fillHeadCp;
+        if (rel < 0 || rel >= RichLen(g_dst) - 2) FinishDstFill();
+        else { ScrollToChar(g_dst, rel); return; }
+    }
+    ScrollToChar(g_dst, idx);
+}
 static void StopDstFill() {
     if (!g_fillPending) return;
     KillTimer(g_hwnd, TIMER_FILL);
     g_fillPending = false;
     wstring().swap(g_fillSrc);
-    g_fillAt = 0;
+    g_fillAt = g_fillHeadEnd = 0;
+    g_fillHeadCp = 0;
 }
-// 다음 조각을 끝에 이어 넣음. 다 넣었으면 true
+static long CpCount(const wstring& w, size_t a, size_t b) {  // w[a,b)가 글 칸에서 차지하는 글자 수 (CRLF는 한 글자)
+    long cp = 0;
+    for (size_t k = a; k < b; ++k) if (!(w[k] == L'\n' && k > a && w[k - 1] == L'\r')) ++cp;
+    return cp;
+}
+// 다음 조각을 넣음 (뒷부분 먼저, 그다음 앞부분). 다 넣었으면 true
+// 앞부분(읽던 곳보다 앞)은 타이머로 넣지 않고, 위로 올라가거나 글 전체가 필요할 때 FinishDstFill로 넣음
 static bool FillStep(size_t maxChars) {
     HWND h = g_dst;
-    size_t n = g_fillSrc.size(), a = g_fillAt, b = std::min(n, a + maxChars);
-    if (b < n) {  // 줄 끝에서 자름 (CRLF·두 칸 글자를 가르지 않게)
-        size_t lim = std::min(n, b + 20000);
-        while (b < lim && g_fillSrc[b - 1] != L'\n') ++b;
-        if (b < n && g_fillSrc[b - 1] != L'\n') {
-            if (g_fillSrc[b - 1] == L'\r' && g_fillSrc[b] == L'\n') ++b;
-            else if (g_fillSrc[b - 1] >= 0xD800 && g_fillSrc[b - 1] <= 0xDBFF) ++b;
+    const wstring& w = g_fillSrc;
+    size_t n = w.size();
+    bool tail = g_fillAt < n;
+    if (!tail && g_fillHeadEnd == 0) return true;
+    size_t a, b;
+    if (tail) {  // 끝에 이어 붙일 조각: 줄 끝에서 자름
+        a = g_fillAt;
+        b = maxChars >= n - a ? n : a + maxChars;
+        if (b < n) {
+            size_t lim = std::min(n, b + 20000);
+            while (b < lim && w[b - 1] != L'\n') ++b;
+            if (b < n && w[b - 1] != L'\n') {
+                if (w[b - 1] == L'\r' && w[b] == L'\n') ++b;
+                else if (w[b - 1] >= 0xD800 && w[b - 1] <= 0xDBFF) ++b;
+            }
+        }
+    } else {     // 처음에 끼워 넣을 조각: 넣지 않은 앞부분의 끝쪽, 줄 처음에서 자름
+        b = g_fillHeadEnd;
+        a = maxChars >= b ? 0 : b - maxChars;
+        if (a > 0) {
+            size_t lim = a > 20000 ? a - 20000 : 0;
+            while (a > lim && w[a - 1] != L'\n') --a;
+            if (a > 0 && w[a - 1] != L'\n') {
+                if (w[a] == L'\n' && w[a - 1] == L'\r') --a;
+                else if (w[a] >= 0xDC00 && w[a] <= 0xDFFF) --a;
+            }
         }
     }
     if (b <= a) return true;
-    wstring chunk = g_fillSrc.substr(a, b - a), disp = chunk;
-    bool sub = false;  // 화면 표시용 글자 바꿈 (SetRichText와 같은 규칙)
+    wstring chunk = w.substr(a, b - a), disp = chunk;
+    bool sub = false;  // 화면 표시용 글자 바꿈 (SetRichText와 같은 규칙, 앞뒤 글자는 글 전체에서 봄)
     for (size_t k = 0; k < chunk.size(); ++k)
-        if (DispSubst(g_fillSrc, a + k)) { disp[k] = 0x200B; sub = true; }
+        if (DispSubst(w, a + k)) { disp[k] = 0x200B; sub = true; }
     DispMap& dm = g_dm[1];
-    if (sub && !dm.on) { dm.on = true; dm.orig = g_fillSrc.substr(0, a); dm.disp = dm.orig; dm.stash.clear(); }
-    if (dm.on) { dm.orig += chunk; dm.disp += disp; }
+    if (sub && !dm.on) { dm.on = true; dm.orig = w.substr(g_fillHeadEnd, g_fillAt - g_fillHeadEnd); dm.disp = dm.orig; dm.stash.clear(); }
+    if (dm.on) {
+        if (tail) { dm.orig += chunk; dm.disp += disp; }
+        else { dm.orig.insert(0, chunk); dm.disp.insert(0, disp); }
+    }
+    long k = CpCount(w, a, b);
     bool ol = g_loading, os = g_syncing;
     g_loading = true; g_syncing = true; g_inFill = true;  // 바뀜·선택 알림 무시
     long top = TopChar(h);
@@ -1657,25 +1699,28 @@ static bool FillStep(size_t maxChars) {
     SendMessageW(h, WM_SETREDRAW, FALSE, 0);
     bool ro = (GetWindowLongW(h, GWL_STYLE) & ES_READONLY) != 0;
     if (ro) SendMessageW(h, EM_SETREADONLY, FALSE, 0);
-    long len = RichLen(h);
-    CHARRANGE end = {len, len};
-    SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&end);
+    long len = tail ? RichLen(h) : 0;
+    CHARRANGE at = {len, len};
+    SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&at);
     SETTEXTEX st = {ST_SELECTION, 1200};
     SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)disp.c_str());
     if (ro) SendMessageW(h, EM_SETREADONLY, TRUE, 0);
     SendMessageW(h, EM_EMPTYUNDOBUFFER, 0, 0);
+    if (!tail) { cr.cpMin += k; cr.cpMax += k; top += k; }  // 앞에 끼워 넣은 만큼 뒤로 밀림
     SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
     if (TopChar(h) != top) ScrollToChar(h, top);  // 보던 곳 그대로
     SendMessageW(h, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(h, nullptr, FALSE);
     g_inFill = false; g_loading = ol; g_syncing = os;
-    g_fillAt = b;
-    return b >= n;
+    if (tail) g_fillAt = b;
+    else { g_fillHeadEnd = a; g_fillHeadCp -= k; }
+    return g_fillAt >= n && g_fillHeadEnd == 0;
 }
 // 다 넣은 뒤: 칸이 글을 바꿔 넣었는지 확인 (SetRichText와 같은 처리)
 static void EndDstFill() {
     KillTimer(g_hwnd, TIMER_FILL);
     g_fillPending = false;
+    g_fillHeadCp = 0;
     DispMap& dm = g_dm[1];
     if (dm.on) {
         wstring cur = RawRichText(g_dst);
@@ -1691,38 +1736,65 @@ static void EndDstFill() {
         }
     }
     wstring().swap(g_fillSrc);
-    g_fillAt = 0;
+    g_fillAt = g_fillHeadEnd = 0;
     InvalidateRect(g_hwnd, nullptr, FALSE);
 }
 static void FinishDstFill() {
     if (!g_fillPending || g_inFill) return;
     HCURSOR oc = SetCursor(LoadCursor(nullptr, IDC_WAIT));
-    while (!FillStep((size_t)-1 / 2)) {}
-    EndDstFill();
+    if (g_fillHeadEnd > 0) {
+        // 앞부분이 남음: 글 칸 맨 앞에 끼워 넣지 않고, 글 전체를 한 번에 다시 넣은 뒤 보던 곳·선택을 되살림
+        long head = g_fillHeadCp, gtop = TopChar(g_dst) + head;
+        CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
+        wstring full;
+        full.swap(g_fillSrc);
+        KillTimer(g_hwnd, TIMER_FILL);
+        g_fillPending = false;
+        g_fillAt = g_fillHeadEnd = 0;
+        g_fillHeadCp = 0;
+        SetRichText(g_dst, full);
+        bool os = g_syncing; g_syncing = true;
+        CHARRANGE nr = {cr.cpMin + head, cr.cpMax + head};
+        SendMessageW(g_dst, EM_EXSETSEL, 0, (LPARAM)&nr);
+        g_syncing = os;
+        ScrollToChar(g_dst, gtop);
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+    } else {
+        while (!FillStep((size_t)-1 / 2)) {}
+        EndDstFill();
+    }
     SetCursor(oc);
 }
-// 읽기 모드: 큰 글은 앞부분(need 글자 위치까지는 꼭)을 먼저 넣고 나머지는 이어 넣음
+// 읽기 모드: 큰 글은 need(곧 보여 줄 글자 위치) 둘레를 먼저 넣고, 나머지는 뒤에서 이어 넣음
 static void SetDstProgressive(const wstring& w, long need) {
     StopDstFill();
-    bool small = w.size() < kFillFirst + kFillFirst / 2;
+    size_t n = w.size();
+    bool small = n < kFillFirst + kFillFirst / 2;
     // 대신 그릴 글꼴이 필요한 글(간체자 등)은 글꼴 지정을 한 번에 해야 하므로 예전처럼 한 번에
     if (small || FontLacksGlyphs(EditFontOf(g_dst), w) || _wcsnicmp(w.c_str(), L"{\\rtf", 5) == 0) { SetRichText(g_dst, w); return; }
-    long want = std::max(0L, need) + (long)kFillFirst, cp = 0;
-    size_t i = 0, n = w.size();
-    while (i < n && (cp < want || i < kFillFirst)) {
-        if (w[i] == L'\r' && i + 1 < n && w[i + 1] == L'\n') i += 2; else ++i;
-        ++cp;
-    }
+    if (need < 0) need = 0;
+    long headWant = need > 100000 ? need - 50000 : 0;  // 읽을 곳 조금 앞부터 (처음 가까우면 처음부터)
+    size_t i = 0, hs = 0;
+    long cp = 0;
+    auto step = [&]() { if (w[i] == L'\r' && i + 1 < n && w[i + 1] == L'\n') i += 2; else ++i; ++cp; };
+    while (i < n && cp < headWant) step();
+    while (i > 0 && w[i - 1] != L'\n') --i;  // 줄 처음으로 (글자 수는 아래에서 다시 셈)
+    hs = i;
+    long headCp = CpCount(w, 0, hs);
+    cp = headCp;
+    long want = std::max(need, headCp) + (long)kFillFirst;
+    while (i < n && (cp < want || i - hs < kFillFirst)) step();
     while (i < n && w[i - 1] != L'\n') ++i;  // 줄 끝까지
-    if (i + kFillChunk >= n) { SetRichText(g_dst, w); return; }  // 남는 게 적으면 한 번에
-    long total = cp;
-    for (size_t k = i; k < n; ++k) if (!(w[k] == L'\n' && k > 0 && w[k - 1] == L'\r')) ++total;
-    SetRichText(g_dst, w.substr(0, i));
+    if (hs == 0 && i + kFillChunk >= n) { SetRichText(g_dst, w); return; }  // 남는 게 적으면 한 번에
+    SetRichText(g_dst, w.substr(hs, i - hs));
     g_fillSrc = w;
     g_fillAt = i;
-    g_fillTotalCp = total;
-    g_fillPending = true;
-    SetTimer(g_hwnd, TIMER_FILL, 15, nullptr);
+    g_fillHeadEnd = hs;
+    g_fillHeadCp = headCp;
+    g_fillTotalCp = CpCount(w, 0, n);
+    g_fillPending = g_fillAt < n || g_fillHeadEnd > 0;
+    if (g_fillPending) SetTimer(g_hwnd, TIMER_FILL, kFillGapMs, nullptr);
+    else wstring().swap(g_fillSrc);
 }
 // 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 / 읽기 모드는 끝까지 (큰 글은 앞부분부터 이어 넣기)
 // need: 곧 보여 줄 글자 위치 (그곳까지는 바로 넣음)
@@ -1794,7 +1866,7 @@ static void FinishReprocess(ProcJob& j) {
     {   // 보던 곳 유지 · 다시 연 파일은 지난번 읽던 곳으로
         if (g_newDoc) g_pendingTop = -1;
         if (target > 0) {
-            if (g_preview && target >= RichLen(g_dst) - 1) {  // 정리 모드에서 앞부분 밖: 읽기 모드에서 감
+            if (g_preview && !g_reading && target >= RichLen(g_dst) - 1) {  // 정리 모드에서 앞부분 밖: 읽기 모드에서 감
                 g_pendingTop = target;
                 if (restoring) g_restoreNote = L"   ·   지난번 읽던 곳은 읽기 모드에서 이어 볼 수 있습니다";
             } else {
@@ -2630,6 +2702,8 @@ static void LoadWantPos(const wstring& path) {
 // 읽기 모드: 한 쪽 넘김 (화면 맨 아래 줄이 다음 쪽 첫 줄이 됨)
 static void PageFlip(int dir) {
     RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
+    if (dir < 0 && g_fillPending && g_fillHeadEnd > 0 && SendMessageW(g_dst, EM_GETFIRSTVISIBLELINE, 0, 0) <= 2)
+        FinishDstFill();  // 넣은 곳의 처음: 앞부분을 먼저 넣음 (보던 곳은 그대로)
     if (dir > 0 && g_fillPending) {  // 넣은 곳의 끝 가까이: 남은 글을 먼저 넣음
         POINTL pb = {fr.left + 1, fr.bottom - 2};
         long cb = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pb);
@@ -2677,7 +2751,7 @@ static int ReadPercent() {
         RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
         POINTL pt = {fr.left + 1, fr.bottom - 2};
         long ci = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pt);
-        int pct = (int)(100.0 * (ci + 1) / g_fillTotalCp + 0.5);
+        int pct = (int)(100.0 * (ci + 1 + g_fillHeadCp) / g_fillTotalCp + 0.5);
         return pct > 100 ? 100 : pct < 0 ? 0 : pct;
     }
     SCROLLINFO si = {sizeof(si), SIF_ALL};
@@ -2702,6 +2776,11 @@ static bool InFlipZone(HWND h, int y, int* dir) {
 static void SetFullscreen(bool on);
 static void StepFontSize(int dir);
 static LRESULT CALLBACK DstProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (g_reading && g_fillPending && g_fillHeadEnd > 0 && !g_inFill &&  // 넣은 곳의 맨 위에서 더 올라가려 하면 앞부분을 먼저 넣음
+        ((msg == WM_MOUSEWHEEL && GET_WHEEL_DELTA_WPARAM(wp) > 0 && !(GET_KEYSTATE_WPARAM(wp) & MK_CONTROL)) || msg == WM_VSCROLL ||
+         (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_PRIOR || wp == VK_HOME))) &&
+        SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0) == 0)
+        FinishDstFill();
     if (g_reading) {
         int dir = 0;
         switch (msg) {
@@ -2894,7 +2973,7 @@ static void ShowTipNow(HWND b) {
     TipItem* t = TipOf(b);
     if (!t || !g_tipWnd || !IsWindowVisible(b)) return;
     HDC sdc = GetDC(nullptr);
-    Gdiplus::Font font(sdc, g_uiFont);
+    Gdiplus::Font font(sdc, g_smallFont);
     StringFormat sf(StringFormat::GenericTypographic());
     sf.SetFormatFlags(sf.GetFormatFlags() | StringFormatFlagsMeasureTrailingSpaces | StringFormatFlagsNoWrap);
     RectF rn, rk;
@@ -2904,21 +2983,22 @@ static void ShowTipNow(HWND b) {
         mg.MeasureString(t->name.c_str(), -1, &font, PointF(0, 0), &sf, &rn);
         if (!t->key.empty()) mg.MeasureString(t->key.c_str(), -1, &font, PointF(0, 0), &sf, &rk);
     }
-    const int padX = S(10), padY = S(6), gap = S(10), sh = S(7), rad = S(6);
+    const int padX = S(8), padY = S(4), gap = S(8), sh = S(4), rad = S(4);
     int wName = (int)ceil(rn.Width) + 1, wKey = t->key.empty() ? 0 : (int)ceil(rk.Width) + 1;
-    int th = std::max((int)ceil(rn.Height), MeasureH(g_uiFont));
+    int th = std::max((int)ceil(rn.Height), MeasureH(g_smallFont));
     int bw = padX * 2 + wName + (wKey ? gap + wKey : 0), bh = padY * 2 + th;
     int W = bw + sh * 2, H = bh + sh * 2;
     RECT br; GetWindowRect(b, &br);
     MONITORINFO mi = {sizeof(mi)};
     GetMonitorInfoW(MonitorFromRect(&br, MONITOR_DEFAULTTONEAREST), &mi);
     RECT wa = mi.rcWork;
-    int x = (br.left + br.right) / 2 - bw / 2, y = br.bottom + S(6);
-    if (y + bh > wa.bottom) y = br.top - S(6) - bh;  // 아래에 자리가 없으면 위로
+    int x = (br.left + br.right) / 2 - bw / 2, y = br.bottom + S(4);
+    if (y + bh > wa.bottom) y = br.top - S(4) - bh;  // 아래에 자리가 없으면 위로
     if (x + bw > wa.right - S(4)) x = wa.right - S(4) - bw;
     if (x < wa.left + S(4)) x = wa.left + S(4);
-    COLORREF bg = g_dark ? RGB(60, 65, 74) : RGB(38, 42, 50), edge = g_dark ? RGB(88, 95, 108) : RGB(38, 42, 50);
-    COLORREF tc = RGB(255, 255, 255), kc = g_dark ? RGB(176, 184, 197) : RGB(160, 170, 186);
+    // 메뉴보다 눈에 띄지 않게: 밝은 테마는 흰 바탕 + 옅은 테두리, 어두운 테마는 메뉴보다 조금 밝은 회색
+    COLORREF bg = g_dark ? RGB(46, 50, 56) : RGB(255, 255, 255), edge = g_dark ? RGB(72, 78, 88) : RGB(214, 218, 225);
+    COLORREF tc = g_dark ? RGB(222, 226, 231) : RGB(52, 58, 66), kc = g_dark ? RGB(146, 154, 166) : RGB(140, 147, 158);
     Bitmap bmp(W, H, PixelFormat32bppPARGB);
     {
         Graphics g(&bmp);
@@ -2927,8 +3007,8 @@ static void ShowTipNow(HWND b) {
         g.Clear(Color(0, 0, 0, 0));
         for (int k = sh; k >= 1; --k) {  // 부드러운 그림자 (아래로 조금 치우침)
             GraphicsPath p;
-            RoundPath(p, (REAL)(sh - k), (REAL)(sh - k + S(2)), (REAL)(bw + 2 * k), (REAL)(bh + 2 * k), (REAL)(rad + k));
-            SolidBrush sb(Color((BYTE)(3 + 10 * (sh - k + 1) / sh), 0, 0, 0));
+            RoundPath(p, (REAL)(sh - k), (REAL)(sh - k + S(1)), (REAL)(bw + 2 * k), (REAL)(bh + 2 * k), (REAL)(rad + k));
+            SolidBrush sb(Color((BYTE)(2 + 5 * (sh - k + 1) / sh), 0, 0, 0));
             g.FillPath(&sb, &p);
         }
         GraphicsPath body;
@@ -3107,7 +3187,7 @@ static void ShowTocMenu(HWND anchor) {
     DestroyMenu(m);
     if (cmd >= ID_TOC_BASE && cmd < ID_TOC_BASE + (int)pos.size()) {
         size_t at = pos[cmd - ID_TOC_BASE];
-        ScrollToChar(g_dst, CpOf(hay, at));
+        GoToGlobal(CpOf(hay, at));
         g_readPct = -1;
     }
     SetFocus(g_dst);
@@ -6047,9 +6127,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         OnProcDone((ProcJob*)lp);
         return 0;
     case WM_TIMER:
-        if (wp == TIMER_FILL) {  // 읽기 모드 큰 글: 다음 조각 이어 넣기
+        if (wp == TIMER_FILL) {  // 읽기 모드 큰 글: 뒷부분 다음 조각 이어 넣기
             if (!g_fillPending) { KillTimer(h, TIMER_FILL); return 0; }
-            if (FillStep(kFillChunk)) EndDstFill();
+            if (g_fillAt < g_fillSrc.size()) FillStep(kFillChunk);
+            if (g_fillAt >= g_fillSrc.size()) {  // 뒷부분 끝: 앞부분은 필요할 때만 (보던 화면이 밀리지 않게)
+                KillTimer(h, TIMER_FILL);
+                if (g_fillHeadEnd == 0) EndDstFill();
+            }
             return 0;
         }
         if (wp == TIMER_READ) {  // 읽기 모드: 읽은 곳 %
