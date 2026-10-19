@@ -14,3 +14,8 @@ MinGW-w64 (GCC 13, win32 스레드 방식) 빌드 — src 폴더에서:
   - 버전 정보(VERSIONINFO)와 매니페스트(asInvoker: 관리자 권한 요청 안 함)를 넣음
   - DEP·ASLR(--nxcompat, --dynamicbase, --high-entropy-va) 켬
   - 추가 DLL 없이 Windows 기본 DLL만 사용 (static 링크) — 빌드 때 가져오는 DLL 목록을 검사함
+
+측정판 (개발용, 배포하지 않음):
+  위 명령에 -DMEASURE 를 더하면 파일 열기·모드 전환 때 단계별 시간을 재서 창으로 보여 주고,
+  실행 파일 옆 YamoonCleanReader_측정기록.txt 에 남기는 실행 파일이 만들어집니다.
+  (-DMEASURE 없이 빌드한 배포판에는 측정 코드가 들어가지 않습니다)

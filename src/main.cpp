@@ -11,6 +11,8 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <richedit.h>
+#include <richole.h>
+#include <tom.h>
 #include <gdiplus.h>
 #include <string>
 #include <vector>
@@ -74,7 +76,7 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.2";
+static const wchar_t* kVersion = L"2.3";
 static const wchar_t* kDate = L"2026년 10월 19일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
@@ -122,6 +124,61 @@ static std::vector<int> g_srcToOut;  // 원본 글자 -> 결과 글자 위치
 static wstring g_ini;
 
 static int S(int v) { return MulDiv(v, g_dpi, 96); }
+
+// ---------------------------------------------------------------------------
+// 측정판 (빌드할 때 -DMEASURE를 줄 때만 들어감. 배포판에는 아무것도 들어가지 않음)
+// 파일 열기·모드 전환 때 단계마다 걸린 시간을 재서 창으로 보여 주고, 실행 파일 옆 기록 파일에 덧붙임
+#define WM_APP_MEAS (WM_APP + 40)
+#ifdef MEASURE
+namespace meas {
+static bool on = false;          // 재는 중
+static LARGE_INTEGER qf, t0, tl;
+static wstring title;
+static std::vector<std::pair<wstring, double>> steps;
+static std::vector<wstring> notes;
+static wstring logPath;
+static double Ms(const LARGE_INTEGER& a, const LARGE_INTEGER& b) { return (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)qf.QuadPart; }
+static void Begin(const wstring& t) {
+    on = true;
+    title = t;
+    steps.clear();
+    notes.clear();
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&t0);
+    tl = t0;
+}
+static void Mark(const wstring& name) {  // 앞 표시부터 지금까지를 이 단계의 시간으로
+    if (!on) return;
+    LARGE_INTEGER n; QueryPerformanceCounter(&n);
+    steps.push_back({name, Ms(tl, n)});
+    tl = n;
+}
+static void Note(const wstring& s) { if (on) notes.push_back(s); }
+static wstring Num(long long v) {  // 1,234,567
+    wstring s = std::to_wstring(v < 0 ? -v : v), r;
+    for (size_t i = 0; i < s.size(); ++i) { if (i && (s.size() - i) % 3 == 0) r += L','; r += s[i]; }
+    return v < 0 ? L"-" + r : r;
+}
+static void Finish();
+static void Tick();
+static void LogLine(const wstring& s);
+static bool mon = false;                  // 첫 화면 뒤 지켜보는 중
+static LARGE_INTEGER monStart, monLast, monChange;
+static double maxGap = 0;
+static int lastMax = -1;
+static long long firstFlipMs = -1;        // 열고 나서 첫 쪽 넘김
+static bool flipPending = false;
+}  // namespace meas
+#define MEAS_BEGIN(t) meas::Begin(t)
+#define MEAS_MARK(n) meas::Mark(n)
+#define MEAS_NOTE(s) meas::Note(s)
+#define MEAS_ON() meas::on
+#else
+#define MEAS_BEGIN(t) ((void)0)
+#define MEAS_MARK(n) ((void)0)
+#define MEAS_NOTE(s) ((void)0)
+#define MEAS_ON() false
+#endif
 
 // ---------------------------------------------------------------------------
 // 읽기 모드 · 보기 설정 (글꼴, 크기, 색, 줄 간격, 여백)
@@ -312,7 +369,8 @@ static bool ApplyGlyphFallback(HWND h) {
         lstrcpynW(cf.szFaceName, kFallbackFonts[runs[r].font].face, LF_FACESIZE);
         cf.bCharSet = kFallbackFonts[runs[r].font].charset;
         SendMessageW(h, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-        if ((r == 64 && elapsedMs() / 64.0 * (double)(runs.size() - 1) > 1500.0) || (r > 64 && (r & 63) == 0 && elapsedMs() > 2000.0)) {
+        // (큰 글은 뒤쪽 묶음 하나가 몇 초씩 걸릴 수 있어 2초 넘음은 묶음마다 확인)
+        if ((r == 64 && elapsedMs() / 64.0 * (double)(runs.size() - 1) > 1500.0) || (r > 0 && elapsedMs() > 2000.0)) {
             lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);  // 너무 오래 걸림: 되돌림
             cf.bCharSet = lf.lfCharSet;
             SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
@@ -434,8 +492,11 @@ static void ApplyEditLook(HWND h) {
     int lsp = (view && vl >= 1) ? kLineSp[vl - 1] : 0;  // 줄 간격은 읽기 모드에서만
     bool narrow = view && vl == 0;                     // 좁게: 줄 높이를 글꼴 높이의 90%로 고정
     pf.dySpaceAfter = g_vSize * 20 * lsp / 100;  // twips
-    // 정리 모드: 줄 높이를 글꼴 높이로 고정 (원본·결과 칸이 같은 간격). 읽기 모드는 예전처럼 한 줄 간격 (좁게만 90%로 고정)
-    LONG fixedLine = view ? (narrow ? EditLineTwips(h, EditFontOf(h)) * kNarrowPct / 100 : 0) : EditLineTwips(h, EditFontOf(h));
+    // 줄 높이를 글꼴 높이로 고정 (원본·결과 칸이 같은 간격). 읽기 모드도 같은 높이가 기준:
+    // 보통 = 정리 모드와 같음, 좁게 = 그 90%, 조금 넓게부터 = 보통 + 줄 뒤 여백
+    // (고정하지 않으면 Windows 기본 한 줄 간격이 정리 모드보다 넓고, 다른 글꼴 글자가 낀 줄만 더 높아짐)
+    LONG baseLine = EditLineTwips(h, EditFontOf(h));
+    LONG fixedLine = (view && narrow) ? baseLine * kNarrowPct / 100 : baseLine;
     pf.bLineSpacingRule = fixedLine > 0 ? 4 : 0;  // 4: 정확히 dyLineSpacing
     pf.dyLineSpacing = fixedLine;
     static LONG lastSp[2] = {0, 0}, lastLs[2] = {-1, -1};  // 창마다 마지막으로 준 값 (바뀔 때만 전체에 적용: 큰 글에서 빠르게)
@@ -880,6 +941,9 @@ static wstring CheckTextFile(const wstring& path, long long maxBytes) {
 
 static wstring FileName(const wstring& p);
 static void ShowNotSupported(const wstring& path, const wstring& why) {
+#ifdef MEASURE
+    meas::on = false;  // 못 연 파일은 재지 않음
+#endif
     wstring m;
     if (why.compare(0, 6, L"파일이 너무") == 0)
         m = L"파일이 너무 커서 열 수 없습니다.\n\n" + FileName(path) + L"\n\n" +
@@ -1137,7 +1201,36 @@ static DWORD CALLBACK RtfReadCb(DWORD_PTR ck, LPBYTE buf, LONG n, LONG* got) {
     return 0;
 }
 static bool g_rtfIn[2];  // 0 원본 칸, 1 결과 칸: 다른 글꼴이 섞인 글을 한 번에 넣기로 열었는지
-static bool InsertGlyphRtf(HWND h, const wstring& ins) {
+// 글 칸의 글자 하나에 들어간 글꼴 이름을, 선택(커서)을 옮기지 않고 알아냄 (글 칸의 문서 개체 TOM 사용).
+// 선택을 옮기면 글 칸이 커서 자리를 정하려고 글 처음부터 그 자리까지 줄 나눔을 그 자리에서 다 해서,
+// 큰 글의 뒤쪽 글자는 몇 초가 걸림. 알아내지 못하면 false (부르는 쪽이 예전 방식으로)
+static bool FaceAtNoSel(HWND h, long pos, std::wstring& face) {
+    typedef void(WINAPI * SysFreeFn)(BSTR);
+    static SysFreeFn sysFree = (SysFreeFn)(void*)GetProcAddress(LoadLibraryW(L"oleaut32.dll"), "SysFreeString");  // Windows 기본 DLL (실행 때 불러옴)
+    if (!sysFree) return false;
+    static const GUID kIidTextDocument = {0x8CC497C0, 0xA1DF, 0x11CE, {0x80, 0x98, 0x00, 0xAA, 0x00, 0x47, 0xBE, 0x5D}};  // ITextDocument
+    IUnknown* ole = nullptr;
+    if (!SendMessageW(h, EM_GETOLEINTERFACE, 0, (LPARAM)&ole) || !ole) return false;
+    ITextDocument* doc = nullptr;
+    HRESULT hr = ole->QueryInterface(kIidTextDocument, (void**)&doc);
+    ole->Release();
+    if (FAILED(hr) || !doc) return false;
+    bool ok = false;
+    ITextRange* r = nullptr;
+    if (SUCCEEDED(doc->Range(pos, pos + 1, &r)) && r) {
+        ITextFont* f = nullptr;
+        if (SUCCEEDED(r->GetFont(&f)) && f) {
+            BSTR b = nullptr;
+            if (SUCCEEDED(f->GetName(&b)) && b) { face = b; sysFree(b); ok = true; }
+            f->Release();
+        }
+        r->Release();
+    }
+    doc->Release();
+    return ok;
+}
+// h: 실패해서 비울 때 긴 글이면 새 칸으로 바꾸므로, 부르는 쪽의 칸 핸들도 함께 바뀜
+static bool InsertGlyphRtf(HWND& h, const wstring& ins) {
     HFONT bf = EditFontOf(h);
     if (!bf) return false;
     LOGFONTW lf = {};
@@ -1150,6 +1243,19 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
         if (k <= 0 || bad) return false;
         out.append(mb, k);
         return true;
+    };
+    // 한글 음절·자모의 CP949 바이트 표 (처음 한 번만 만듦). 글자마다 변환 함수를 부르지 않아 큰 글에서 빠름 (결과 바이트는 같음)
+    static std::vector<std::string> hanTab;
+    if (hanTab.empty()) {
+        hanTab.resize(0xD7A3 - 0xAC00 + 1 + 0x318E - 0x3131 + 1);
+        size_t k = 0;
+        for (wchar_t c = 0xAC00; c <= 0xD7A3; ++c) cp949(&c, 1, hanTab[k++]);
+        for (wchar_t c = 0x3131; c <= 0x318E; ++c) cp949(&c, 1, hanTab[k++]);
+    }
+    auto hanBytes = [](wchar_t w) -> const std::string* {  // 바꿀 수 없으면 빈 글
+        if (w >= 0xAC00 && w <= 0xD7A3) return &hanTab[w - 0xAC00];
+        if (w >= 0x3131 && w <= 0x318E) return &hanTab[0xD7A3 - 0xAC00 + 1 + (w - 0x3131)];
+        return nullptr;
     };
     std::string face;
     for (const wchar_t* p = lf.lfFaceName; *p; ++p) {
@@ -1208,8 +1314,10 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
             if (w < 0x80) {
                 if (w == L'\\' || w == L'{' || w == L'}') body += '\\';
                 body += (char)w;
-            } else if (!((w >= 0xAC00 && w <= 0xD7A3) || (w >= 0x3131 && w <= 0x318E)) || !cp949(&w, 1, body)) {
-                body += "\\u" + std::to_string((short)w) + " ";
+            } else {
+                const std::string* hb = hanBytes(w);
+                if (hb && !hb->empty()) body += *hb;
+                else body += "\\u" + std::to_string((short)w) + " ";
             }
             expect += w;
         }
@@ -1229,18 +1337,29 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
            (pf.bLineSpacingRule == 4 && pf.dyLineSpacing > 0 ? "\\sl-" + std::to_string(pf.dyLineSpacing) + "\\slmult0" : std::string()) +
            "\\plain" + (lf.lfWeight >= FW_SEMIBOLD ? "\\b" : "") + "\\f0\\fs" +
            std::to_string(halfPt) + "\\cf1 " + body + "}";
+    MEAS_MARK(L"   └ RTF 글 만들기 (" + meas::Num((long long)rtf.size()) + L"바이트)");
     RtfSrc src = {&rtf, 0};
     EDITSTREAM es = {(DWORD_PTR)&src, 0, RtfReadCb};
     SendMessageW(h, EM_STREAMIN, SF_RTF, (LPARAM)&es);
+    MEAS_MARK(L"   └ 글 칸이 RTF 읽어 넣기");
     auto undo = [&]() {  // 실패: 비우고 원래 모양으로 (부르는 쪽이 보통 방식으로 다시 넣음)
-        SETTEXTEX st = {ST_DEFAULT, 1200};
-        SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)L"");
+        if ((h == g_src || h == g_dst) && RichLen(h) > 20000) {  // 긴 글은 지우는 일이 아주 느릴 수 있어 새 칸으로 바꿈 (여는 때와 같이)
+            HWND& g = (h == g_src) ? g_src : g_dst;
+            RecreateRich(g);
+            h = g;
+            SendMessageW(h, WM_SETREDRAW, FALSE, 0);
+            SendMessageW(h, EM_SETTEXTMODE, TM_RICHTEXT | TM_MULTILEVELUNDO | TM_MULTICODEPAGE, 0);
+        } else {
+            SETTEXTEX st = {ST_DEFAULT, 1200};
+            SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)L"");
+        }
         SendMessageW(h, WM_SETFONT, (WPARAM)bf, FALSE);
         ApplyEditLook(h);
         SendMessageW(h, WM_SETREDRAW, FALSE, 0);  // ApplyEditLook이 다시 그리기를 켜므로 넣는 동안은 다시 끔
         return false;
     };
     if (es.dwError || RawRichText(h, false) != expect) return undo();
+    MEAS_MARK(L"   └ 넣은 글이 원본과 같은지 확인 (" + meas::Num((long long)expect.size()) + L"자)");
     auto fmtAt = [&](long pos) {
         CHARRANGE pr = {pos, pos + 1};
         SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&pr);
@@ -1249,11 +1368,21 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
         SendMessageW(h, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&c);
         return c;
     };
-    CHARFORMAT2W a = fmtAt(firstFb);
-    if (lstrcmpiW(a.szFaceName, kFallbackFonts[firstFbFont].face) != 0) return undo();
+    // 처음 다른 글꼴 글자: 글 뒤쪽에 있을 수 있으므로 선택을 옮기지 않고 글꼴만 물음 (못 하면 예전처럼 선택해서)
+    std::wstring fbFace;
+    bool viaTom = FaceAtNoSel(h, firstFb, fbFace);
+    CHARFORMAT2W a = {};
+    if (!viaTom) { a = fmtAt(firstFb); fbFace = a.szFaceName; }
+    MEAS_MARK(L"   └ 처음 다른 글꼴 글자의 글꼴 확인 (글의 " + std::to_wstring(expect.empty() ? 0 : (int)((double)firstFb * 100 / expect.size())) + L"% 지점, " + (viaTom ? L"선택 없이)" : L"선택해서)"));
+    if (lstrcmpiW(fbFace.c_str(), kFallbackFonts[firstFbFont].face) != 0) return undo();
     if (firstBase >= 0) {
         CHARFORMAT2W b = fmtAt(firstBase);
+        MEAS_MARK(L"   └ 처음 보통 글자의 글꼴 확인 (글의 " + std::to_wstring(expect.empty() ? 0 : (int)((double)firstBase * 100 / expect.size())) + L"% 지점)");
         if (lstrcmpiW(b.szFaceName, lf.lfFaceName) != 0) return undo();
+        // 글자 크기·색은 글 전체에 같게 넣었으므로(다른 글꼴 글자는 글꼴만 바뀜) 앞쪽 보통 글자로 확인
+        if (viaTom) a = b;
+    } else if (viaTom) {
+        a = fmtAt(firstFb);  // 보통 글자가 없는 글: 다른 글꼴 글자가 맨 앞쪽
     }
     if (MulDiv(a.yHeight, g_dpi, 1440) != MulDiv(def.yHeight, g_dpi, 1440) || a.crTextColor != def.crTextColor ||
         (a.dwEffects & CFE_AUTOCOLOR) != (def.dwEffects & CFE_AUTOCOLOR)) {
@@ -1264,21 +1393,29 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
         fix.crTextColor = def.crTextColor;
         fix.dwEffects = def.dwEffects & CFE_AUTOCOLOR;
         SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&fix);
+        MEAS_MARK(L"   └ 글 전체 크기·색 다시 맞추기 (드문 경우)");
     }
     return true;
 }
 static void SetRichText(HWND h, const wstring& s) {
+#ifdef MEASURE
+    const wstring mp = h == g_src ? L"[원본 칸] " : h == g_dst ? L"[결과 칸] " : L"[다른 칸] ";
+    MEAS_MARK(mp + L"글 넣기 전 준비");
+#endif
     if (h == g_src || h == g_dst) {
         HWND& g = (h == g_src) ? g_src : g_dst;
         if (RichLen(g) > 20000) RecreateRich(g);
         h = g;
     }
+    MEAS_MARK(mp + L"예전 글 칸 바꾸기(새 칸 만들기)");
     g_loading = true;
     SendMessageW(h, WM_SETREDRAW, FALSE, 0);
     SETTEXTEX st = {ST_DEFAULT, 1200};
     // 글꼴에 없는 글자(간체자 등)가 있는 글만 서식 텍스트 방식으로 열어 그 글자에만 다른 글꼴을 지정함 (보통 글은 예전과 똑같이)
     // "{\rtf"로 시작하는 글은 서식으로 읽히지 않게 늘 일반 텍스트 방식
     bool needFb = (h == g_src || h == g_dst) && FontLacksGlyphs(EditFontOf(h), s) && _wcsnicmp(s.c_str(), L"{\\rtf", 5) != 0;
+    MEAS_MARK(mp + L"글꼴에 없는 글자 검사");
+    if (!s.empty()) MEAS_NOTE(mp + L"글꼴에 없는 글자: " + (needFb ? L"있음" : L"없음 → 보통 방식"));
     if (h == g_src || h == g_dst) SetAutoFont(h, false);  // 예전과 같이 자동 글꼴 바꿈은 끔
     if (h == g_src || h == g_dst) {  // 빈 상태에서 모양(색·줄 간격)을 정한 뒤 글을 넣음: 긴 글을 다시 배치하지 않아 빠름
         SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)L"");
@@ -1291,6 +1428,7 @@ static void SetRichText(HWND h, const wstring& s) {
         g_loading = true;
         SendMessageW(h, WM_SETREDRAW, FALSE, 0);
     }
+    MEAS_MARK(mp + L"빈 칸에 모양(색·줄 간격) 정하기");
     DispMap* dm = DmOf(h);
     wstring disp;
     if (dm) {
@@ -1301,13 +1439,17 @@ static void SetRichText(HWND h, const wstring& s) {
         if (dm->on) { dm->orig = s; dm->disp = disp; }
         else { dm->orig.clear(); dm->disp.clear(); }
     }
+    MEAS_MARK(mp + L"보이지 않는 서식 문자 표시용 바꿈");
+    if (dm && dm->on) MEAS_NOTE(mp + L"보이지 않는 서식 문자(U+200C 등): 있음 → 표시용 사본 만들고 넣은 뒤 다시 확인");
     bool rtfDone = false;  // 글꼴 지정이 들어간 글로 한 번에 넣었는지
     {
         bool os = g_syncing; g_syncing = true;
         if (needFb) rtfDone = InsertGlyphRtf(h, dm && dm->on ? disp : s);
         g_syncing = os;
     }
+    if (needFb) MEAS_MARK(mp + L"서식(RTF) 방식으로 글 넣기" + (rtfDone ? wstring() : wstring(L" (실패)")));
     if (!rtfDone) SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)(dm && dm->on ? disp.c_str() : s.c_str()));
+    if (!rtfDone) MEAS_MARK(mp + L"글 넣기 (" + meas::Num((long long)s.size()) + L"자)");
     if (dm && dm->on) {  // 칸이 글을 바꿔 넣었으면: 길이가 같으면 표시 글만 맞추고, 다르면 바꿈 없이 원래 글을 넣음
         wstring cur = RawRichText(h);
         if (cur != dm->disp) {
@@ -1318,16 +1460,36 @@ static void SetRichText(HWND h, const wstring& s) {
                 rtfDone = false;
             }
         }
+        MEAS_MARK(mp + L"넣은 글 다시 꺼내 확인");
     }
     if (needFb && !rtfDone) {
         // (한 번에 넣기를 못 했을 때) 없는 글자 묶음마다 글꼴을 지정. 이것도 못 하면 Windows 자동 글꼴 바꿈으로 다시 넣음
         bool os = g_syncing; g_syncing = true;
         if (!ApplyGlyphFallback(h)) {
             std::wstring cur = RawRichText(h);
+            MEAS_MARK(mp + L"없는 글자에 글꼴 하나씩 지정 (못 함)");
+            // 묶음마다 지정도 못 했으면 Windows 자동 글꼴 바꿈으로 다시 넣음
+            // 긴 글을 지우는 일은 아주 느릴 수 있으므로, 비울 때는 여는 때와 같이 새 칸으로 바꿈
+            if (h == g_src || h == g_dst) {
+                HWND& g = (h == g_src) ? g_src : g_dst;
+                if (RichLen(g) > 20000) {
+                    RecreateRich(g);
+                    h = g;
+                    SendMessageW(h, WM_SETREDRAW, FALSE, 0);
+                    SendMessageW(h, EM_SETTEXTMODE, TM_RICHTEXT | TM_MULTILEVELUNDO | TM_MULTICODEPAGE, 0);
+                    SendMessageW(h, WM_SETFONT, (WPARAM)EditFontOf(h), FALSE);
+                    SetAutoFont(h, false);
+                    ApplyEditLook(h);
+                    SendMessageW(h, WM_SETREDRAW, FALSE, 0);
+                } else {
+                    SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)L"");
+                }
+            }
             SetAutoFont(h, true);
             SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)cur.c_str());
         }
         g_syncing = os;
+        MEAS_MARK(mp + L"없는 글자에 글꼴 하나씩 지정");
     }
     if (h == g_src || h == g_dst) g_rtfIn[h == g_dst ? 1 : 0] = rtfDone;
     SendMessageW(h, EM_EMPTYUNDOBUFFER, 0, 0);
@@ -1336,6 +1498,7 @@ static void SetRichText(HWND h, const wstring& s) {
     SendMessageW(h, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(h, nullptr, TRUE);
     g_loading = false;
+    MEAS_MARK(mp + L"마무리(커서를 맨 앞으로)");
 }
 // 테마를 바꿀 때 글자색 바꾸기. 다른 글꼴이 섞인 글(한 번에 넣기로 연 글)은 글꼴 구간이 많아 글 전체에 색을 다시 칠하면 느리므로,
 // 빈 칸에 새 모양을 정한 뒤 지금 글을 새 색으로 한 번에 다시 넣음 (글·보던 위치·선택은 그대로)
@@ -1509,6 +1672,9 @@ static void SetStatus(const wstring& msg) {
 
 static void UpdateTitle() {
     wstring t = L"야문 클린리더";
+#ifdef MEASURE
+    t += L" [측정판]";
+#endif
     if (!g_path.empty()) t = g_path + L" - " + t;  // 제목 표시줄에는 전체 위치
     SetWindowTextW(g_hwnd, t.c_str());
     InvalidateRect(g_hwnd, &g_rcHeader, FALSE);
@@ -1610,7 +1776,9 @@ static void GoToGlobal(long idx) { ScrollToChar(g_dst, idx < 0 ? 0 : idx); }
 // 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 (읽기 모드는 큰 글도 처음부터 끝까지 한 번에)
 static void ShowResultText() {
     if (!g_preview || g_reading) {
-        SetRichText(g_dst, U32ToW(g_out, true));
+        wstring w = U32ToW(g_out, true);
+        MEAS_MARK(L"결과 글을 화면용 글자로 바꾸기");
+        SetRichText(g_dst, w);
     } else {
         size_t oc = g_prevSrcEnd < g_srcToOut.size() ? (size_t)g_srcToOut[g_prevSrcEnd] : g_out.size();
         if (oc > g_out.size()) oc = g_out.size();
@@ -1626,12 +1794,15 @@ static void FinishReprocess(ProcJob& j) {
     const TidyReport& r = j.r;
     const TidyOptions& o = j.o;
     BuildMaps();
+    MEAS_MARK(L"원본↔결과 위치 표 만들기");
     long newLen = (long)g_out.size();
     auto scaled = [&](long idx, long oldLen) { return (oldLen > 0 && oldLen != newLen) ? (long)((double)idx * newLen / oldLen) : idx; };
     bool restoring = g_newDoc && g_wantIdx > 0;
     long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : 0;
     ShowResultText();
     g_dstDirty = false;
+    MEAS_NOTE(L"글자 수: 원문 " + meas::Num((long long)g_text.size()) + L"자 → 결과 " + meas::Num((long long)g_out.size()) + L"자" +
+              (g_preview && !g_reading ? L" (정리 모드: 앞부분만 화면에)" : L" (화면에 전체)"));
 
     g_metaSrc = g_epub ? wstring(L"EPUB") : wstring(kEncName[g_enc]);
     {   // 연 파일의 크기 (여러 파일을 합쳐 열었으면 합친 크기, 붙여넣은 글은 없음)
@@ -1670,7 +1841,9 @@ static void FinishReprocess(ProcJob& j) {
     if (r.replaceHits) g_chips.push_back(L"내 규칙 " + std::to_wstring(r.replaceHits) + L"곳");
     if (r.sceneBreaks && o.sceneMode != 2) g_chips.push_back(L"장면 전환 " + std::to_wstring(r.sceneBreaks) + L"곳 유지");
     if (r.unevenGaps) g_chips.push_back(L"제각각인 문단 간격 통일");
+    MEAS_MARK(L"정보 글 만들기");
     Layout();
+    MEAS_MARK(L"창 배치(Layout · 여백 다시 지정)");
     {   // 보던 곳 유지 · 다시 연 파일은 지난번 읽던 곳으로
         if (g_newDoc) g_pendingTop = -1;
         if (target > 0) {
@@ -1687,7 +1860,10 @@ static void FinishReprocess(ProcJob& j) {
         g_posPath = g_mergeFiles.empty() ? g_path : wstring();
         g_readPct = -1;
     }
+    MEAS_MARK(target > 0 ? L"지난번 읽던 곳으로 이동" : L"맨 처음으로 (이동 없음)");
+    if (MEAS_ON() && target > 0) MEAS_NOTE(L"읽던 곳 복원: 글의 약 " + std::to_wstring(newLen > 0 ? (int)((double)target * 100 / newLen) : 0) + L"% 지점");
     InvalidateRect(g_hwnd, nullptr, FALSE);
+    if (MEAS_ON()) PostMessageW(g_hwnd, WM_APP_MEAS, 0, 0);
 }
 
 static DWORD WINAPI ProcThread(LPVOID p) {
@@ -1723,6 +1899,7 @@ static void OnProcDone(ProcJob* j) {
         if (!g_text.empty()) StartJob(); else AfterTextChange();
         return;
     }
+    MEAS_MARK(L"정리 엔진 (뒤에서 처리, 엔진만 " + meas::Num(j->ms) + L" ms)");
     FinishReprocess(*j);
     delete j;
     SetStatus((g_path.empty() ? L"정리했습니다." : L"정리했습니다: " + (g_mergeFiles.empty() ? g_path : FileName(g_path))) + g_restoreNote);
@@ -1740,12 +1917,13 @@ static void Reprocess() {
         return;
     }
     if (g_busy) { g_again = true; return; }
-    if (g_text.size() > kAsyncChars) { StartJob(); return; }
+    if (g_text.size() > kAsyncChars) { MEAS_MARK(L"정리 시작 전"); StartJob(); return; }
     ProcJob j;
     j.o = ReadOptions();
     auto t0 = std::chrono::steady_clock::now();
     j.out = TidyParts(g_text, g_mergeBounds, j.o, &j.r, &j.map);
     j.ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    MEAS_MARK(L"정리 엔진 (바로 처리)");
     FinishReprocess(j);
 }
 
@@ -1779,16 +1957,24 @@ static void AddRecent(const wstring& path) {
     SaveRecent(o);
 }
 static bool LoadFile(const wstring& path) {
+    MEAS_BEGIN(wstring(L"파일 열기 — ") + (g_reading ? L"읽기 모드" : L"정리 모드"));
     wstring why = CheckTextFile(path, kMaxOpenBytes);
     if (!why.empty()) { ShowNotSupported(path, why); return false; }
     std::string bytes;
-    if (!ReadAll(path, bytes)) {
+    MEAS_MARK(L"파일 검사");
+    bool readOk = ReadAll(path, bytes);
+    MEAS_MARK(L"파일 읽기 (" + SizeText((long long)bytes.size()) + L")");
+    if (!readOk) {
+#ifdef MEASURE
+        meas::on = false;
+#endif
         MessageBoxW(g_hwnd, (L"파일을 열 수 없습니다:\n" + path).c_str(), L"야문 클린리더", MB_ICONERROR);
         return false;
     }
     int enc = E_UTF8;
     U32 text;
     if (!ReadTextOf(path, bytes, text, enc, why)) { ShowNotSupported(path, why); return false; }
+    MEAS_MARK(IsEpubPath(path) ? L"EPUB에서 본문 꺼내기" : L"인코딩 판별·글자 풀기");
     std::string().swap(bytes);
     g_text.swap(text);
     g_epub = IsEpubPath(path);
@@ -1798,9 +1984,11 @@ static bool LoadFile(const wstring& path) {
     g_mergeBounds.clear();
     g_lastSaved.clear();
     ShowSource();
+    MEAS_MARK(L"원본 칸 준비 (읽기 모드는 비워 둠)");
     LoadWantPos(path);
     AddRecent(path);
     UpdateTitle();
+    MEAS_MARK(L"읽던 곳·최근 파일 기록");
     Reprocess();
     if (!g_busy) { SetStatus(L"열었습니다: " + path + g_restoreNote); g_restoreNote.clear(); }
     return true;
@@ -2242,7 +2430,7 @@ static wstring LoadRulesText() {
 // ---------------------------------------------------------------------------
 // 컨트롤
 static bool g_fold = false;
-struct PanelItem { RECT rc; wstring text; int kind; int icon = 0; };  // kind 0 그룹 제목, 1 라벨, 2 흐린 설명, 3 이름표 아이콘(icon)
+struct PanelItem { RECT rc; wstring text; int kind; };  // kind 0 그룹 제목, 1 라벨, 2 흐린 설명
 static std::vector<PanelItem> g_items;
 static std::vector<PanelItem> g_readItems;  // 읽기 모드 보기 설정 줄의 이름표
 static RECT g_rcLongBox;                    // 글자 수 칸 테두리
@@ -2336,20 +2524,29 @@ static LRESULT CALLBACK ComboProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_P
             bool dis = !IsWindowEnabled(h);
             COLORREF edge = dis ? col::panelLine : (open || focus) ? col::accent : hover ? col::comboHoverEdge : col::border;
             COLORREF arrow = dis ? col::boxBorder : (open || hover) ? col::accent : col::faint;
+            int sel = (int)SendMessageW(h, CB_GETCURSEL, 0, 0);
+            // 배색 칸: 칸 전체를 그 배색으로 칠하고 이름을 그 글자색으로 (칸 안에 또 테두리 상자를 두지 않음)
+            bool scheme = sel >= 0 && h == g_cbVColor && !dis;
+            COLORREF sfg = 0, sbg = 0;
+            if (scheme) {
+                ViewColorsOf(sel, sfg, sbg);
+                if (!(open || hover)) arrow = sfg;
+            }
             {
                 Graphics g(dc);
                 g.SetSmoothingMode(SmoothingModeAntiAlias);
-                FillRound(g, rc, S(5), dis ? col::fieldDis : col::field, edge);
+                FillRound(g, rc, S(5), scheme ? sbg : dis ? col::fieldDis : col::field, edge);
                 REAL u = (REAL)g_dpi / 96.0f, cx = (REAL)w - 13.0f * u, cy = (REAL)hh / 2.0f;
                 Pen pen(GC(arrow), 1.6f * u);
                 pen.SetStartCap(LineCapRound); pen.SetEndCap(LineCapRound); pen.SetLineJoin(LineJoinRound);
                 PointF pts[3] = {PointF(cx - 3.5f * u, cy - 1.8f * u), PointF(cx, cy + 1.8f * u), PointF(cx + 3.5f * u, cy - 1.8f * u)};
                 g.DrawLines(&pen, pts, 3);
             }
-            int sel = (int)SendMessageW(h, CB_GETCURSEL, 0, 0);
-            if (sel >= 0 && h == g_cbVColor) {
-                RECT cr = {S(4), S(3), w - S(24), hh - S(3)};
-                DrawColorChip(dc, cr, sel, col::swatchEdge);
+            if (scheme) {
+                wchar_t buf[128];
+                int n = (int)SendMessageW(h, CB_GETLBTEXT, sel, (LPARAM)buf);
+                RECT tr = {S(9), 0, w - S(24), hh};
+                DrawTxt(dc, wstring(buf, n > 0 ? n : 0), tr, g_uiFont, sfg, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
             } else if (sel >= 0) {
                 wchar_t buf[128];
                 int n = (int)SendMessageW(h, CB_GETLBTEXT, sel, (LPARAM)buf);
@@ -2506,6 +2703,22 @@ static void LoadWantPos(const wstring& path) {
 
 // 읽기 모드: 한 쪽 넘김 (화면 맨 아래 줄이 다음 쪽 첫 줄이 됨)
 static void PageFlip(int dir) {
+#ifdef MEASURE
+    LARGE_INTEGER pf0; QueryPerformanceCounter(&pf0);
+    struct FlipLog {
+        LARGE_INTEGER a;
+        ~FlipLog() {
+            LARGE_INTEGER b; QueryPerformanceCounter(&b);
+            LARGE_INTEGER f; QueryPerformanceFrequency(&f);
+            long long ms = (b.QuadPart - a.QuadPart) * 1000 / f.QuadPart;
+            if (meas::flipPending) {  // 열고 나서 첫 쪽 넘김
+                meas::flipPending = false;
+                meas::LogLine(L"[첫 쪽 넘김] " + meas::Num(ms) + L" ms" + (meas::mon ? L" (줄 나눔 지켜보는 중)" : L"") + L"\r\n\r\n");
+                SetStatus(L"측정판: 첫 쪽 넘김 " + meas::Num(ms) + L" ms");
+            }
+        }
+    } flipLog{pf0};
+#endif
     RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
     long first = (long)SendMessageW(g_dst, EM_GETFIRSTVISIBLELINE, 0, 0);
     if (dir > 0) {  // 화면 맨 아래(잘린) 줄이 다음 쪽 맨 위로
@@ -2513,10 +2726,12 @@ static void PageFlip(int dir) {
         long ci = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pt);
         long last = (long)SendMessageW(g_dst, EM_EXLINEFROMCHAR, 0, ci);
         if (last <= first) last = first + 1;
-        long total = (long)SendMessageW(g_dst, EM_GETLINECOUNT, 0, 0);
-        for (int k = 0; k < 3 && last + 1 < total; ++k) {  // 쪽 맨 위가 빈 줄이면 건너뜀
+        // 쪽 맨 위가 빈 줄이면 건너뜀. 다음 줄이 있는지는 그 줄만 물어봄
+        // (전체 줄 수를 물으면 큰 글은 글 끝까지 줄 나눔이 끝날 때까지 기다리게 됨)
+        for (int k = 0; k < 3; ++k) {
             long ci2 = (long)SendMessageW(g_dst, EM_LINEINDEX, last, 0);
             if (ci2 < 0 || SendMessageW(g_dst, EM_LINELENGTH, ci2, 0) > 0) break;
+            if ((long)SendMessageW(g_dst, EM_LINEINDEX, last + 1, 0) < 0) break;  // 마지막 줄
             ++last;
         }
         long c = (long)SendMessageW(g_dst, EM_LINEINDEX, last, 0);
@@ -2620,11 +2835,18 @@ static void ReloadDst(long top) {
         SendMessageW(g_dst, WM_SETFONT, (WPARAM)(g_reading ? g_readFont : g_edFont), FALSE);
         g_loading = ol;
     }
+    MEAS_MARK(L"결과 칸 비우기(새 칸)·글꼴 정하기");
     Layout();
+    MEAS_MARK(L"창 배치(빈 칸)");
     if (fromOut) ShowResultText();
     else SetRichText(g_dst, keep);
     g_dstDirty = dirty;
     GoToGlobal(top);
+    MEAS_MARK(top > 0 ? L"보던 곳으로 이동" : L"맨 처음으로 (이동 없음)");
+    if (MEAS_ON()) {
+        MEAS_NOTE(L"글자 수: 결과 " + meas::Num((long long)g_out.size()) + L"자" + (g_preview && !g_reading ? L" (정리 모드: 앞부분만 화면에)" : L" (화면에 전체)"));
+        PostMessageW(g_hwnd, WM_APP_MEAS, 0, 0);
+    }
 }
 // 보기 설정 적용: 글꼴·크기·줄 간격은 다시 넣기, 색·여백은 그대로 적용
 static void ApplyView(bool fontChanged, bool relayout) {
@@ -2632,7 +2854,7 @@ static void ApplyView(bool fontChanged, bool relayout) {
     if (fontChanged) { old = g_readFont; g_readFont = MakeReadFont(); }
     if (g_reading) {
         SetCursor(LoadCursor(nullptr, IDC_WAIT));
-        if (fontChanged || relayout) ReloadDst(GlobalTop());
+        if (fontChanged || relayout) { MEAS_BEGIN(L"보기 설정 바꾸기 (글꼴·크기·줄 간격 등)"); ReloadDst(GlobalTop()); }
         else { RecolorEdit(g_dst); Layout(); }
     }
     if (old) DeleteObject(old);  // 결과 창은 이미 새 글꼴을 씀
@@ -2686,16 +2908,17 @@ static void SetFullscreen(bool on);
 static void SetReading(bool on) {
     if (on == g_reading) return;
     if (!on && g_fullscreen) SetFullscreen(false);
+    MEAS_BEGIN(on ? L"모드 전환 — 정리 → 읽기" : L"모드 전환 — 읽기 → 정리");
     long top = GlobalTop();
     if (on && g_pendingTop > top) top = g_pendingTop;
     SetCursor(LoadCursor(nullptr, IDC_WAIT));
     g_reading = on;
-    if (!on && g_srcStale) FillSource();  // 읽기 모드에서 연 글: 이제 원본 칸을 채움
+    if (!on && g_srcStale) FillSource();
+    MEAS_MARK(L"전환 준비");  // 읽기 모드에서 연 글: 이제 원본 칸을 채움
     SendMessageW(g_dst, EM_SETREADONLY, (on || g_preview) ? TRUE : FALSE, 0);
     ReloadDst(top);  // 글꼴·모양을 바꾸고 (큰 글은 알맞은 부분을) 다시 넣음
     g_pendingTop = (g_preview && !on && top >= RichLen(g_dst) - 1) ? top : -1;  // 정리 모드의 앞부분 밖에서 읽던 자리는 기억
-    InvalidateRect(g_btnRead, nullptr, FALSE);
-    InvalidateRect(g_btnTidy, nullptr, FALSE);
+    for (HWND b : {g_btnRead, g_btnTidy, g_btnSave, g_btnToc, g_btnFind, g_btnMark, g_btnFull}) InvalidateRect(b, nullptr, FALSE);  // 모드에 따라 모양이 다른 단추
     {   // 커서를 보이는 첫 줄로 (예전 자리에 남지 않게)
         bool os = g_syncing; g_syncing = true;
         long c = TopChar(g_dst);
@@ -3120,6 +3343,7 @@ static void SetFullscreen(bool on) {
     FullTip();
     Layout();
     InvalidateRect(g_hwnd, nullptr, TRUE);
+    for (HWND b : {g_btnToc, g_btnFind, g_btnMark, g_btnFull}) InvalidateRect(b, nullptr, FALSE);  // 놓인 곳에 따라 바탕색이 다름
     SetFocus(g_dst);
 }
 // 글자 크기 한 단계 (Ctrl+휠, Ctrl + / -)
@@ -3461,53 +3685,62 @@ static void Layout() {
     }
     if (g_reading || g_fullscreen) for (HWND hb : {g_btnFold, g_btnReset}) put(hb, 0, 0, 0, 0, false);
 
-    // 읽기 모드: 보기 설정 줄 [가 글꼴·크기·굵게] | [배색·글자색·바탕색] | [줄 간격·여백] ...... [↺]
+    // 읽기 모드: 보기 설정 줄 하나에 읽기 도구까지 (글 칸 머리 줄을 따로 두지 않음)
+    // [목차 찾기 책갈피] | 글꼴 [글꼴][크기][B] | [배색][글자색][바탕색] | 줄 간격 [ ] 여백 [ ] [↺] ........ [전체 화면]
+    // 전체 화면에서는 이 줄이 숨고, 읽기 도구는 글 칸 머리에 둠
     g_readItems.clear();
     g_viewSeps.clear();
     {
         HWND vc[] = {g_cbVFont, g_cbVSize, g_btnVBold, g_cbVColor, g_btnVFg, g_btnVBg, g_cbVLine, g_cbVMargin, g_btnVReset};
         static int fontW = 0;  // 닫힌 글꼴 칸은 좁게 (펼친 목록은 전체 이름). 한 번만 잼
         if (!fontW) fontW = std::min(combosW({g_cbVFont}), S(150));
-        const int iconLab = S(16) + S(6);  // 이름표 아이콘 + 간격
+        auto labW = [&](const wchar_t* t) { return MeasureW(g_uiFont, t) + S(8); };  // 이름표 글 + 간격
         const int sqW = S(30);             // 아이콘 단추 폭
-        const int sepW = S(4) + 1 + S(16);
+        const int toolGap = S(2);          // 읽기 도구 단추 사이
+        const int sepW = S(10) + 1 + S(10);  // 묶음 사이 (구분선 양옆 같은 간격)
         int sizeW = combosW({g_cbVSize}), colorW = combosW({g_cbVColor}) + S(10), lineW = combosW({g_cbVLine}), marginW = combosW({g_cbVMargin});
         // 보기 설정 줄이 한 줄에 들어가는 폭 (정리 모드에서도 미리 재 둠: 읽기로 바꿨을 때 두 줄이 되지 않게)
-        g_viewNeedW = S(12) + iconLab + fontW + S(6) + sizeW + S(6) + sqW + sepW + colorW + S(6) + sqW + S(4) + sqW + sepW +
-                      iconLab + lineW + S(14) + iconLab + marginW + S(16) + sqW + S(10);
+        g_viewNeedW = S(12) + sqW * 3 + toolGap * 2 + sepW + labW(L"글꼴") + fontW + S(6) + sizeW + S(6) + sqW + sepW + colorW + S(6) + sqW + S(4) + sqW +
+                      sepW + labW(L"줄 간격") + lineW + S(14) + labW(L"여백") + marginW + S(8) + sqW + S(16) + sqW + S(10);
         if (!g_reading || g_fullscreen) {
             for (HWND hv : vc) put(hv, 0, 0, 0, 0, false);
         } else {
-            int rx = S(12), rowR = S(40), ry0 = toolH, lines = 1;
-            auto wrapIf = [&](int need) {
-                if (rx > S(12) && rx + need > W - S(12) - sqW - S(8)) { rx = S(12); ry0 += rowR; lines++; }
+            int rx = S(12), rowR = S(40), ry0 = toolH;
+            int cy = ry0 + (rowR - cbH) / 2;  // 단추도 선택목록과 같은 높이
+            auto label = [&](const wchar_t* t) {
+                int lw = labW(t);
+                g_readItems.push_back({{rx, cy, rx + lw, cy + cbH}, t, 1});
+                rx += lw;
             };
-            auto item = [&](int icon, HWND hv, int w, bool combo, int gapAfter) {  // icon: 앞에 그릴 이름표 아이콘 (0이면 없음)
-                int lw = icon ? iconLab : 0;
-                wrapIf(lw + w);
-                int cy = ry0 + (rowR - cbH) / 2;  // 단추도 선택목록과 같은 높이
-                if (icon) g_readItems.push_back({{rx, cy, rx + S(16), cy + cbH}, L"", 3, icon});
-                put(hv, rx + lw, cy, w, combo ? S(300) : cbH, true);
-                rx += lw + w + gapAfter;
+            auto item = [&](HWND hv, int w, bool combo, int gapAfter) {
+                put(hv, rx, cy, w, combo ? S(300) : cbH, true);
+                rx += w + gapAfter;
             };
             auto sep = [&]() {
-                if (rx == S(12)) return;
-                rx += S(4);
+                rx += S(10);
                 g_viewSeps.push_back(RECT{rx, ry0 + S(10), rx + 1, ry0 + rowR - S(10)});
-                rx += 1 + S(16);
+                rx += 1 + S(10);
             };
-            item(ID_VFONT, g_cbVFont, fontW, true, S(6));
-            item(0, g_cbVSize, sizeW, true, S(6));
-            item(0, g_btnVBold, sqW, false, 0);
+            item(g_btnToc, sqW, false, toolGap);
+            item(g_btnFind, sqW, false, toolGap);
+            item(g_btnMark, sqW, false, 0);
             sep();
-            item(0, g_cbVColor, colorW, true, S(6));
-            item(0, g_btnVFg, sqW, false, S(4));
-            item(0, g_btnVBg, sqW, false, 0);
+            label(L"글꼴");
+            item(g_cbVFont, fontW, true, S(6));
+            item(g_cbVSize, sizeW, true, S(6));
+            item(g_btnVBold, sqW, false, 0);
             sep();
-            item(ID_VLINE, g_cbVLine, lineW, true, S(14));
-            item(ID_VMARGIN, g_cbVMargin, marginW, true, 0);
-            put(g_btnVReset, W - S(10) - sqW, ry0 + (rowR - cbH) / 2, sqW, cbH, true);  // 오른쪽 끝
-            panelH = lines * rowR;
+            item(g_cbVColor, colorW, true, S(6));
+            item(g_btnVFg, sqW, false, S(4));
+            item(g_btnVBg, sqW, false, 0);
+            sep();
+            label(L"줄 간격");
+            item(g_cbVLine, lineW, true, S(14));
+            label(L"여백");
+            item(g_cbVMargin, marginW, true, S(8));
+            item(g_btnVReset, sqW, false, 0);
+            put(g_btnFull, W - S(10) - sqW, cy, sqW, cbH, true);  // 전체 화면: 오른쪽 끝
+            panelH = rowR;
         }
     }
     g_rcPanel = {0, toolH, W, toolH + panelH};
@@ -3521,7 +3754,14 @@ static void Layout() {
     int edBottomInset = S(4);  // 둥근 아래 모서리가 보이게 편집 칸을 조금 올림 (그 틈은 칸 바탕색으로 칠함)
     g_rcSrcHead = {m, top, m + half, top + headH};
     g_rcDstHead = {m + half + gap, top, W - m, top + headH};
-    if (g_reading) {  // 결과 창을 왼쪽 끝까지 넓힘
+    if (g_reading && !g_fullscreen) {  // 읽기 모드: 결과 창을 왼쪽 끝까지 넓히고, 칸 머리 없이 종이만 (읽기 도구는 보기 설정 줄에)
+        g_rcSrcHead = {0, 0, 0, 0};
+        g_rcDstHead = {m, top, W - m, top};  // 높이 0: 둥근 종이의 위 끝
+        for (HWND hh : {g_btnPaste, g_btnClear, g_chkSync, g_btnCopyAll, g_btnReplace}) put(hh, 0, 0, 0, 0, false);
+        put(g_src, 0, 0, 0, 0, false);
+        int topInset = S(4);  // 둥근 위 모서리가 보이게 (아래 모서리와 같게)
+        put(g_dst, m + 1, top + topInset, W - m * 2 - 2, bottom - top - topInset - 1 - edBottomInset);
+    } else if (g_reading) {  // 전체 화면: 보기 설정 줄이 없으므로 칸 머리에 읽기 도구
         g_rcSrcHead = {0, 0, 0, 0};
         g_rcDstHead = {m, top, W - m, top + headH};
         int rx = g_rcDstHead.left + S(12) + MeasureW(g_cardFont, L"읽기") + S(10);
@@ -3598,6 +3838,7 @@ static void Paint(HDC hdc) {
         Graphics g(dc);
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         FillRound(g, frame, S(6), edBg, col::border);
+        if (head.bottom <= head.top) return;  // 칸 머리 없는 종이 (읽기 모드)
         GraphicsPath p;
         RoundPathSel(p, (REAL)head.left + 1, (REAL)head.top + 1, (REAL)(head.right - head.left - 2), (REAL)(head.bottom - head.top - 1), (REAL)S(5), true, true, false, false);
         SolidBrush hb(GC(col::paneHead));
@@ -3628,7 +3869,7 @@ static void Paint(HDC hdc) {
             cx -= w + S(5);
         }
     }
-    if (g_fullscreen) { g_chipRc.clear(); g_chipIdx.clear(); }
+    if (g_fullscreen || g_reading) { g_chipRc.clear(); g_chipIdx.clear(); }  // 정리 결과 칩은 정리 모드에서만
     {
         Graphics g(dc);
         g.SetSmoothingMode(SmoothingModeAntiAlias);
@@ -3672,17 +3913,7 @@ static void Paint(HDC hdc) {
                   !en ? col::panelLine : GetFocus() == g_edLong ? col::accent : col::border);
     }
     if (g_reading) {
-        for (auto& it : g_readItems) {
-            if (it.kind != 3) { DrawTxt(dc, it.text, it.rc, g_uiFont, col::label); continue; }
-            if (it.icon == ID_VFONT) {  // 글꼴: "가"
-                DrawTxt(dc, L"가", it.rc, g_btnBold, col::label, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-                continue;
-            }
-            Graphics g(dc);
-            g.SetSmoothingMode(SmoothingModeAntiAlias);
-            REAL u = (REAL)S(16) / 16.0f;
-            DrawToolIcon(g, it.icon, (REAL)it.rc.left, (REAL)(it.rc.top + it.rc.bottom - S(16)) / 2, u, col::label, col::head);
-        }
+        for (auto& it : g_readItems) DrawTxt(dc, it.text, it.rc, g_uiFont, col::label);  // 이름표 (누르는 단추와 구별되게 글자로)
     } else if (!g_fold && !g_fullscreen) {
         for (auto& it : g_items) {
             if (it.kind == 0) DrawTxt(dc, it.text, it.rc, g_sectFont, col::groupTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -3697,13 +3928,15 @@ static void Paint(HDC hdc) {
         RECT mr = {std::max<int>(metaLeft, t.left), r.top, t.right, r.bottom};
         DrawTxt(dc, meta, mr, g_smallFont, col::faint, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     };
+    // 읽기 모드 안내·파일 크기·읽은 %: 전체 화면은 칸 머리에, 아니면 상태줄 오른쪽에 옅게
+    wstring readMeta;
     if (g_reading) {
-        {
-            wstring meta = L"클릭·Space: 쪽 넘김   ·   Esc: " + wstring(g_fullscreen ? L"전체 화면 끝" : L"정리 모드");
-            if (!g_sizeText.empty()) meta += L"   ·   " + g_sizeText;  // 파일 크기 (읽은 %는 맨 오른쪽)
-            if (g_readPct >= 0) meta += L"   ·   " + std::to_wstring(g_readPct) + L"%";
-            head(g_rcDstHead, L"읽기", meta, g_dstMetaLeft);
-        }
+        readMeta = L"클릭·Space: 쪽 넘김   ·   Esc: " + wstring(g_fullscreen ? L"전체 화면 끝" : L"정리 모드");
+        if (!g_sizeText.empty()) readMeta += L"   ·   " + g_sizeText;  // 파일 크기 (읽은 %는 맨 오른쪽)
+        if (g_readPct >= 0) readMeta += L"   ·   " + std::to_wstring(g_readPct) + L"%";
+    }
+    if (g_reading) {
+        if (g_fullscreen) head(g_rcDstHead, L"읽기", readMeta, g_dstMetaLeft);
     } else {
         head(g_rcSrcHead, L"원본", g_metaSrc, g_srcMetaLeft);
         head(g_rcDstHead, L"정리 결과", g_metaDst.empty() ? wstring(L"직접 고친 내용도 그대로 저장됩니다") : g_metaDst, g_dstMetaLeft);
@@ -3711,6 +3944,12 @@ static void Paint(HDC hdc) {
 
     // 상태줄
     int msgRight = g_chipRc.empty() ? W - S(14) : g_chipRc.front().left - S(10);
+    if (g_reading && !g_fullscreen) {  // 오른쪽: 읽기 안내·크기·% (정리 결과 칩은 정리 모드에서만)
+        int mw = MeasureW(g_smallFont, readMeta);
+        RECT mr = {std::max<int>(W / 2, W - S(14) - mw), g_rcStatus.top, W - S(14), g_rcStatus.bottom};
+        DrawTxt(dc, readMeta, mr, g_smallFont, col::faint, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        msgRight = mr.left - S(16);
+    }
     RECT st = {S(14), g_rcStatus.top, msgRight, g_rcStatus.bottom};
     DrawTxt(dc, g_statusMsg, st, g_statusOk ? g_sectFont : g_smallFont, g_statusOk ? col::okText : col::sub);
     for (size_t k = 0; k < g_chipRc.size(); ++k)
@@ -3840,20 +4079,6 @@ static void DrawToolIcon(Graphics& g, int id, REAL ox, REAL oy, REAL u, COLORREF
         g.DrawRectangle(&pen, ox + 3 * u, oy + 11 * u, 5.2f * u, 4.2f * u);
         break;
     }
-    case ID_VLINE: {  // 줄 간격: 위아래 화살표 + 줄
-        g.DrawLine(&pen, P(3.5f, 2.5f), P(3.5f, 13.5f));
-        PointF up[] = {P(1.5f, 4.5f), P(3.5f, 2.5f), P(5.5f, 4.5f)}, dn[] = {P(1.5f, 11.5f), P(3.5f, 13.5f), P(5.5f, 11.5f)};
-        g.DrawLines(&pen, up, 3); g.DrawLines(&pen, dn, 3);
-        for (REAL y : {3.5f, 8.0f, 12.5f}) g.DrawLine(&pen, P(8.5f, y), P(15, y));
-        break;
-    }
-    case ID_VMARGIN: {  // 여백: 쪽 테두리 + 안쪽 여백 선
-        GraphicsPath p; RoundPath(p, ox + 1.5f * u, oy + 2 * u, 13 * u, 12 * u, 1.4f * u); g.DrawPath(&pen, &p);
-        Pen thin(GC(c), 1.2f * u);
-        thin.SetStartCap(LineCapRound); thin.SetEndCap(LineCapRound);
-        for (REAL y : {5.5f, 8.0f, 10.5f}) g.DrawLine(&thin, P(5, y), P(11, y));
-        break;
-    }
     case ID_VBG: {  // 바탕색: 페인트 통
         PointF bucket[] = {P(2, 7.5f), P(7, 2.5f), P(12, 7.5f), P(7, 12.5f)};
         g.DrawPolygon(&pen, bucket, 4);
@@ -3891,7 +4116,7 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
     bool mini = id == ID_FOLD || id == ID_RESET || id == ID_VRESET;  // 옵션·보기 줄의 작은 글자 단추
     bool onHead = id == ID_OPEN || id == ID_RECENT || id == ID_BATCH || id == ID_SAVEAS || id == ID_SAVE || id == ID_THEME || id == ID_ABOUT || mini ||
                   id == ID_COLLAPSE || id == ID_JUNK || id == ID_HANJA || id == ID_HALF || id == ID_VFG || id == ID_VBG || id == ID_VBOLD || id == ID_MODE_TIDY || id == ID_READ;
-    COLORREF bg = (id == ID_SYNC || headGhost || headBtn) ? col::paneHead : inPanel ? col::panel : onHead ? col::head : col::win;  // 주 창 메뉴 영역은 head 바탕
+    COLORREF bg = (headBtn && g_reading && !g_fullscreen) ? col::head : (id == ID_SYNC || headGhost || headBtn) ? col::paneHead : inPanel ? col::panel : onHead ? col::head : col::win;  // 주 창 메뉴 영역은 head 바탕
     FillRect2(dc, r, bg);
     bool hover = (GetWindowLongPtrW(h, GWLP_USERDATA) & 1) != 0;
     bool down = (d->itemState & ODS_SELECTED) != 0;
@@ -3978,7 +4203,7 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
         DrawTxt(dc, L"B", r, g_titleFont, g_vBold ? col::accent : col::text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     } else if (id == ID_OPEN || id == ID_BATCH || id == ID_ABOUT || id == ID_SAVEAS || id == ID_SAVE || id == ID_THEME || id == ID_RECENT || mini || headGhost) {
         // 도구줄·칸 머리·작은 글자 단추: 평소엔 테두리 없이 아이콘 + 글, 마우스를 올리면 옅은 바탕 ([저장]만 색 채움)
-        bool primary = id == ID_SAVE;
+        bool primary = id == ID_SAVE && (!g_reading || g_savedFlash);  // 파란 강조는 정리 모드에서만 (읽기 모드는 다른 아이콘과 같게)
         bool iconOnly = id == ID_THEME || id == ID_ABOUT || id == ID_RECENT || id == ID_SAVE || id == ID_SAVEAS || id == ID_VRESET ||
                         id == ID_RTOC || id == ID_RFIND || id == ID_RMARK || id == ID_RFULL;
         bool L = id != ID_RECENT, R = id != ID_OPEN;  // [열기][▾]는 붙은 한 덩어리
@@ -5907,13 +6132,21 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU:
         if ((HWND)wp == g_src || (HWND)wp == g_dst) { ShowEditMenu((HWND)wp, lp); return 0; }
         break;
+#ifdef MEASURE
+    case WM_APP_MEAS:
+        meas::Finish();
+        return 0;
+#endif
     case WM_APP_PROCDONE:
         OnProcDone((ProcJob*)lp);
         return 0;
     case WM_TIMER:
+#ifdef MEASURE
+        if (wp == 77) { meas::Tick(); return 0; }
+#endif
         if (wp == TIMER_READ) {  // 읽기 모드: 읽은 곳 %
             int p = ReadPercent();
-            if (p != g_readPct) { g_readPct = p; InvalidateRect(h, &g_rcDstHead, FALSE); }
+            if (p != g_readPct) { g_readPct = p; InvalidateRect(h, g_fullscreen ? &g_rcDstHead : &g_rcStatus, FALSE); }
             return 0;
         }
         KillTimer(h, wp);
@@ -6053,6 +6286,94 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
+
+#ifdef MEASURE
+// 측정 끝: 첫 화면 그리기와 남은 줄 나눔까지 잰 뒤 결과를 보여 주고 기록 파일에 덧붙임
+void meas::LogLine(const wstring& line) {
+    if (logPath.empty()) {
+        size_t sl = g_ini.find_last_of(L"\\/");
+        logPath = (sl == wstring::npos ? wstring() : g_ini.substr(0, sl + 1)) + L"YamoonCleanReader_측정기록.txt";
+    }
+    bool fresh = GetFileAttributesW(logPath.c_str()) == INVALID_FILE_ATTRIBUTES;
+    HANDLE fh = CreateFileW(logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (fh == INVALID_HANDLE_VALUE) return;
+    SetFilePointer(fh, 0, nullptr, FILE_END);
+    int n = WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), nullptr, 0, nullptr, nullptr);
+    std::string u8(fresh ? "\xEF\xBB\xBF" : "");
+    size_t at = u8.size();
+    u8.resize(at + n);
+    WideCharToMultiByte(CP_UTF8, 0, line.c_str(), (int)line.size(), &u8[at], n, nullptr, nullptr);
+    DWORD wr = 0;
+    WriteFile(fh, u8.data(), (DWORD)u8.size(), &wr, nullptr);
+    CloseHandle(fh);
+}
+static const UINT_PTR kMeasTimer = 77;
+// 1단계: 첫 화면까지 잰 뒤, 화면이 멈추는지·뒤에서 하는 줄 나눔이 언제 끝나는지 지켜봄 (억지로 끝내게 하지 않음)
+void meas::Finish() {
+    if (!on || mon) return;
+    Mark(L"(앞 단계 뒤 대기 중이던 다른 처리)");
+    RedrawWindow(g_hwnd, nullptr, nullptr, RDW_UPDATENOW | RDW_ALLCHILDREN);
+    Mark(L"첫 화면 그리기");
+    mon = true;
+    maxGap = 0;
+    QueryPerformanceCounter(&monStart);
+    monLast = monChange = monStart;
+    SCROLLINFO si = {sizeof(si), SIF_RANGE};
+    lastMax = GetScrollInfo(g_dst, SB_VERT, &si) ? si.nMax : -1;
+    firstFlipMs = -1;
+    flipPending = true;
+    SetTimer(g_hwnd, kMeasTimer, 15, nullptr);
+}
+// 2단계: 15ms마다. 틱 사이가 길면 그동안 화면이 멈춘 것. 스크롤 막대 범위가 2초 동안 그대로면 줄 나눔이 끝난 것으로 봄
+void meas::Tick() {
+    LARGE_INTEGER n; QueryPerformanceCounter(&n);
+    double gap = Ms(monLast, n);
+    if (gap > maxGap) maxGap = gap;
+    monLast = n;
+    SCROLLINFO si = {sizeof(si), SIF_RANGE};
+    int mx = GetScrollInfo(g_dst, SB_VERT, &si) ? si.nMax : -1;
+    if (mx != lastMax) { lastMax = mx; monChange = n; }
+    if (Ms(monChange, n) < 2000 && Ms(monStart, n) < 30000) return;
+    KillTimer(g_hwnd, kMeasTimer);
+    mon = false;
+    on = false;
+    double bg = Ms(monStart, monChange);
+    long lines = (long)SendMessageW(g_dst, EM_GETLINECOUNT, 0, 0);  // 이미 끝났으면 바로 나옴
+
+    double toFirst = 0;
+    for (auto& st : steps) toFirst += st.second;
+    wstring fileLine;
+    if (!g_path.empty()) {
+        size_t sl = g_path.find_last_of(L"\\/");
+        fileLine = L"파일: " + (sl == wstring::npos ? g_path : g_path.substr(sl + 1));
+        WIN32_FILE_ATTRIBUTE_DATA fa;
+        if (GetFileAttributesExW(g_path.c_str(), GetFileExInfoStandard, &fa))
+            fileLine += L"  (" + SizeText(((long long)fa.nFileSizeHigh << 32) | fa.nFileSizeLow) + L", " + (g_epub ? wstring(L"EPUB") : wstring(kEncName[g_enc])) + L")";
+    }
+    RECT dr; GetClientRect(g_dst, &dr);
+    auto sec = [](double ms) { long long t = (long long)(ms / 100 + 0.5); return std::to_wstring(t / 10) + L"." + std::to_wstring(t % 10) + L"초"; };
+    wstring r = L"[" + title + L"]\r\n";
+    if (!fileLine.empty()) r += fileLine + L"\r\n";
+    r += L"읽기 글꼴: " + g_vFont + L" " + std::to_wstring(g_vSize) + L"pt  ·  결과 칸 폭 " + std::to_wstring(dr.right - dr.left) + L"px  ·  화면 줄 수 " + Num(lines) + L"줄\r\n";
+    for (auto& nt : notes) r += nt + L"\r\n";
+    r += L"\r\n★ 열기 → 첫 화면: " + Num((long long)(toFirst + 0.5)) + L" ms (" + sec(toFirst) + L")\r\n";
+    r += L"★ 첫 화면 뒤 줄 나눔이 끝나기까지: 약 " + Num((long long)(bg + 0.5)) + L" ms" + (bg < 50 ? L" (바로 끝남)" : L"") + L"\r\n";
+    r += L"★ 그동안 화면이 가장 오래 멈춘 시간: " + Num((long long)(maxGap + 0.5)) + L" ms\r\n";
+    r += L"\r\n단계별 시간 (1ms 미만은 생략)\r\n";
+    for (auto& st : steps) {
+        if (st.second < 1.0) continue;
+        r += L"  " + Num((long long)(st.second + 0.5)) + L" ms   " + st.first + L"\r\n";
+    }
+    SYSTEMTIME tm; GetLocalTime(&tm);
+    wchar_t ts[64];
+    swprintf(ts, 64, L"===== %04d-%02d-%02d %02d:%02d:%02d =====\r\n", tm.wYear, tm.wMonth, tm.wDay, tm.wHour, tm.wMinute, tm.wSecond);
+    LogLine(wstring(ts) + r + L"\r\n");
+    if (toFirst + bg < 300) return;  // 금방 끝난 것은 기록 파일에만
+    wstring q = r + L"\r\n(실행 파일 옆 YamoonCleanReader_측정기록.txt에도 저장됐습니다. 이 창에서 Ctrl+C를 누르면 글이 복사됩니다.)\r\n"
+                    L"창을 닫은 뒤 바로 Space를 눌러 첫 쪽 넘김이 얼마나 걸리는지도 기록됩니다.\r\n\r\n";
+    MessageBoxW(g_hwnd, q.c_str(), L"야문 클린리더 측정판", MB_OK | MB_ICONINFORMATION);
+}
+#endif
 
 int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
     g_hInst = hi;
