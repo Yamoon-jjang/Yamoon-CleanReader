@@ -50,7 +50,7 @@ enum {
     ID_M_CUT, ID_M_COPY, ID_M_PASTE, ID_M_SELALL,
     ID_READ, ID_MODE_TIDY, ID_VRESET, ID_RTOC, ID_RFIND, ID_RMARK, ID_RFULL,
     ID_MARK_ADD, ID_MARK_CLEAR, ID_THEME, ID_RECENT, ID_RECENT_CLEAR, ID_THEME_SYS, ID_THEME_LIGHT, ID_THEME_DARK, ID_SIZE_UP, ID_SIZE_DOWN, ID_VFONT, ID_VSIZE, ID_VCOLOR, ID_VFG, ID_VBG, ID_VLINE, ID_VMARGIN, ID_VBOLD,
-    TIMER_LONG = 1, TIMER_SRC = 2, TIMER_SAVED = 3, TIMER_READ = 4, TIMER_FILL = 5,
+    TIMER_LONG = 1, TIMER_SRC = 2, TIMER_SAVED = 3, TIMER_READ = 4,
     ID_TOC_BASE = 20000, ID_MARK_BASE = 24000, ID_RECENT_BASE = 28000  // 목차·책갈피 메뉴 항목
 };
 enum { ID_RP_FIND = 500, ID_RP_REPL, ID_RP_FINDX, ID_RP_REPLX, ID_RP_CASE, ID_RP_WORD, ID_RP_UP, ID_RP_REGEX, ID_RP_NEXT, ID_RP_REPLACE,
@@ -148,10 +148,6 @@ static int g_readPct = -1;
 static void SaveReadPos();
 static void LoadWantPos(const wstring& path);
 static int ReadPercent();
-// 읽기 모드의 큰 글: 앞부분을 먼저 보여 주고 나머지는 뒤에서 조금씩 이어 넣음 (결과 칸)
-static bool g_fillPending = false;   // 아직 넣을 글이 남음
-static bool g_inFill = false;        // 이어 넣는 중 (아래 확인을 건너뜀)
-static void FinishDstFill();         // 남은 글을 지금 모두 넣음 (글 전체가 필요한 일 앞에서)
 // 색 조합: 0 기본 1 아이보리 2 세피아 3 보호 녹색 4 종이 회색 5 연하늘 6 저녁(앰버) 7 어두운 화면 8 사용자 지정
 static const int kColorCustom = 8;
 static void ViewColorsOf(int idx, COLORREF& fg, COLORREF& bg) {
@@ -375,7 +371,6 @@ static long TopChar(HWND h) {
 // 글자 c가 있는 줄이 맨 위에 오도록
 // RichEdit의 스크롤 위치 값은 16비트(65535px)까지라, 글이 그보다 길면 줄 단위로 옮김
 static void ScrollToChar(HWND h, long c) {
-    if (h == g_dst && g_fillPending && !g_inFill && c >= RichLen(h) - 2) FinishDstFill();  // 아직 넣지 않은 곳으로 가려면 먼저 다 넣음
     long len = RichLen(h);
     if (c > len) c = len;
     if (c < 0) c = 0;
@@ -999,7 +994,6 @@ static int SaveEncoding(int srcEnc) {
 // ---------------------------------------------------------------------------
 // RichEdit
 static wstring RawRichText(HWND h, bool crlf = true) {
-    if (h == g_dst && g_fillPending && !g_inFill) FinishDstFill();  // 글 전체를 읽는 일(저장·복사·찾기 등)은 다 넣은 뒤에
     GETTEXTLENGTHEX gl = {(DWORD)((crlf ? GTL_USECRLF : 0) | GTL_PRECISE | GTL_NUMCHARS), 1200};
     LONG len = (LONG)SendMessageW(h, EM_GETTEXTLENGTHEX, (WPARAM)&gl, 0);
     if (len <= 0) return wstring();
@@ -1126,10 +1120,7 @@ static void RecreateRich(HWND& h) {
     SendMessageW(n, EM_SETRECT, 0, (LPARAM)&fr);
     HWND old = h;
     h = n;
-    // 큰 글이 든 칸은 지우는 데 오래 걸릴 수 있어, 먼저 숨기고 새 칸이 화면에 그려진 뒤에 지움
-    ShowWindow(old, SW_HIDE);
-    SetWindowLongPtrW(old, GWLP_ID, 0);  // 알림이 와도 무시되게
-    if (!PostMessageW(g_hwnd, WM_APP + 21, 0, (LPARAM)old)) DestroyWindow(old);
+    DestroyWindow(old);
     if (focus) SetFocus(n);
 }
 static HFONT EditFontOf(HWND h) { return (h == g_dst && g_reading) ? g_readFont : g_edFont; }  // 글 칸에 쓰는 글꼴 (글 칸에 묻지 않음)
@@ -1276,9 +1267,7 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
     }
     return true;
 }
-static void StopDstFill();
 static void SetRichText(HWND h, const wstring& s) {
-    if (h == g_dst && !g_inFill) StopDstFill();  // 새 글로 바뀜: 이어 넣던 글은 버림
     if (h == g_src || h == g_dst) {
         HWND& g = (h == g_src) ? g_src : g_dst;
         if (RichLen(g) > 20000) RecreateRich(g);
@@ -1615,196 +1604,12 @@ struct ProcJob {
 };
 static void AfterTextChange();
 
-// ---- 읽기 모드 큰 글 이어 넣기
-// 정리 모드처럼 지금 읽을 곳 둘레만 먼저 넣어 바로 읽을 수 있게 하고, 나머지는 타이머로 조금씩
-// 뒷부분은 끝에, 앞부분은 처음에 이어 붙임 (창이 멈추지 않게 작은 조각으로).
-// 저장·복사·찾기·목차/책갈피로 먼 곳 이동·모드 전환처럼 글 전체가 필요한 일은 남은 글을 먼저 다 넣고 함.
-static wstring g_fillSrc;          // 결과 칸에 들어갈 글 전체 (원래 글자, 줄 끝 CRLF)
-static size_t g_fillAt = 0;        // 뒷부분: g_fillSrc에서 넣은 곳의 끝
-static size_t g_fillHeadEnd = 0;   // 앞부분: g_fillSrc[0, 여기)는 아직 넣지 않음
-static long g_fillHeadCp = 0;      // 아직 넣지 않은 앞부분의 글 칸 글자 수 (칸 안 위치 + 이것 = 글 전체 위치)
-static long g_fillTotalCp = 0;     // 다 넣었을 때의 글 칸 글자 수 (읽은 % 계산용)
-static const size_t kFillFirst = 300000;  // 처음에 넣는 양 (글자)
-static const size_t kFillChunk = 60000;   // 한 번에 이어 넣는 양 (작게: 넣는 동안 창이 멈춘 듯 보이지 않게)
-static const UINT kFillGapMs = 25;        // 조각 사이 쉬는 시간
-// 결과 창의 맨 위 글자 위치 (글 전체 기준)
-static long GlobalTop() { return TopChar(g_dst) + (g_fillPending ? g_fillHeadCp : 0); }
-static void GoToGlobal(long idx) {
-    if (idx < 0) idx = 0;
-    if (g_fillPending) {  // 아직 넣지 않은 곳이면 먼저 다 넣음
-        long rel = idx - g_fillHeadCp;
-        if (rel < 0 || rel >= RichLen(g_dst) - 2) FinishDstFill();
-        else { ScrollToChar(g_dst, rel); return; }
-    }
-    ScrollToChar(g_dst, idx);
-}
-static void StopDstFill() {
-    if (!g_fillPending) return;
-    KillTimer(g_hwnd, TIMER_FILL);
-    g_fillPending = false;
-    wstring().swap(g_fillSrc);
-    g_fillAt = g_fillHeadEnd = 0;
-    g_fillHeadCp = 0;
-}
-static long CpCount(const wstring& w, size_t a, size_t b) {  // w[a,b)가 글 칸에서 차지하는 글자 수 (CRLF는 한 글자)
-    long cp = 0;
-    for (size_t k = a; k < b; ++k) if (!(w[k] == L'\n' && k > a && w[k - 1] == L'\r')) ++cp;
-    return cp;
-}
-// 다음 조각을 넣음 (뒷부분 먼저, 그다음 앞부분). 다 넣었으면 true
-// 앞부분(읽던 곳보다 앞)은 타이머로 넣지 않고, 위로 올라가거나 글 전체가 필요할 때 FinishDstFill로 넣음
-static bool FillStep(size_t maxChars) {
-    HWND h = g_dst;
-    const wstring& w = g_fillSrc;
-    size_t n = w.size();
-    bool tail = g_fillAt < n;
-    if (!tail && g_fillHeadEnd == 0) return true;
-    size_t a, b;
-    if (tail) {  // 끝에 이어 붙일 조각: 줄 끝에서 자름
-        a = g_fillAt;
-        b = maxChars >= n - a ? n : a + maxChars;
-        if (b < n) {
-            size_t lim = std::min(n, b + 20000);
-            while (b < lim && w[b - 1] != L'\n') ++b;
-            if (b < n && w[b - 1] != L'\n') {
-                if (w[b - 1] == L'\r' && w[b] == L'\n') ++b;
-                else if (w[b - 1] >= 0xD800 && w[b - 1] <= 0xDBFF) ++b;
-            }
-        }
-    } else {     // 처음에 끼워 넣을 조각: 넣지 않은 앞부분의 끝쪽, 줄 처음에서 자름
-        b = g_fillHeadEnd;
-        a = maxChars >= b ? 0 : b - maxChars;
-        if (a > 0) {
-            size_t lim = a > 20000 ? a - 20000 : 0;
-            while (a > lim && w[a - 1] != L'\n') --a;
-            if (a > 0 && w[a - 1] != L'\n') {
-                if (w[a] == L'\n' && w[a - 1] == L'\r') --a;
-                else if (w[a] >= 0xDC00 && w[a] <= 0xDFFF) --a;
-            }
-        }
-    }
-    if (b <= a) return true;
-    wstring chunk = w.substr(a, b - a), disp = chunk;
-    bool sub = false;  // 화면 표시용 글자 바꿈 (SetRichText와 같은 규칙, 앞뒤 글자는 글 전체에서 봄)
-    for (size_t k = 0; k < chunk.size(); ++k)
-        if (DispSubst(w, a + k)) { disp[k] = 0x200B; sub = true; }
-    DispMap& dm = g_dm[1];
-    if (sub && !dm.on) { dm.on = true; dm.orig = w.substr(g_fillHeadEnd, g_fillAt - g_fillHeadEnd); dm.disp = dm.orig; dm.stash.clear(); }
-    if (dm.on) {
-        if (tail) { dm.orig += chunk; dm.disp += disp; }
-        else { dm.orig.insert(0, chunk); dm.disp.insert(0, disp); }
-    }
-    long k = CpCount(w, a, b);
-    bool ol = g_loading, os = g_syncing;
-    g_loading = true; g_syncing = true; g_inFill = true;  // 바뀜·선택 알림 무시
-    long top = TopChar(h);
-    CHARRANGE cr; SendMessageW(h, EM_EXGETSEL, 0, (LPARAM)&cr);
-    SendMessageW(h, WM_SETREDRAW, FALSE, 0);
-    bool ro = (GetWindowLongW(h, GWL_STYLE) & ES_READONLY) != 0;
-    if (ro) SendMessageW(h, EM_SETREADONLY, FALSE, 0);
-    long len = tail ? RichLen(h) : 0;
-    CHARRANGE at = {len, len};
-    SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&at);
-    SETTEXTEX st = {ST_SELECTION, 1200};
-    SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)disp.c_str());
-    if (ro) SendMessageW(h, EM_SETREADONLY, TRUE, 0);
-    SendMessageW(h, EM_EMPTYUNDOBUFFER, 0, 0);
-    if (!tail) { cr.cpMin += k; cr.cpMax += k; top += k; }  // 앞에 끼워 넣은 만큼 뒤로 밀림
-    SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
-    if (TopChar(h) != top) ScrollToChar(h, top);  // 보던 곳 그대로
-    SendMessageW(h, WM_SETREDRAW, TRUE, 0);
-    InvalidateRect(h, nullptr, FALSE);
-    g_inFill = false; g_loading = ol; g_syncing = os;
-    if (tail) g_fillAt = b;
-    else { g_fillHeadEnd = a; g_fillHeadCp -= k; }
-    return g_fillAt >= n && g_fillHeadEnd == 0;
-}
-// 다 넣은 뒤: 칸이 글을 바꿔 넣었는지 확인 (SetRichText와 같은 처리)
-static void EndDstFill() {
-    KillTimer(g_hwnd, TIMER_FILL);
-    g_fillPending = false;
-    g_fillHeadCp = 0;
-    DispMap& dm = g_dm[1];
-    if (dm.on) {
-        wstring cur = RawRichText(g_dst);
-        if (cur != dm.disp) {
-            if (cur.size() == dm.disp.size()) dm.disp = cur;
-            else {  // (드묾) 맞지 않으면 원래 글을 한 번에 다시 넣음
-                long top = TopChar(g_dst);
-                wstring full;
-                full.swap(g_fillSrc);
-                SetRichText(g_dst, full);
-                ScrollToChar(g_dst, top);
-            }
-        }
-    }
-    wstring().swap(g_fillSrc);
-    g_fillAt = g_fillHeadEnd = 0;
-    InvalidateRect(g_hwnd, nullptr, FALSE);
-}
-static void FinishDstFill() {
-    if (!g_fillPending || g_inFill) return;
-    HCURSOR oc = SetCursor(LoadCursor(nullptr, IDC_WAIT));
-    if (g_fillHeadEnd > 0) {
-        // 앞부분이 남음: 글 칸 맨 앞에 끼워 넣지 않고, 글 전체를 한 번에 다시 넣은 뒤 보던 곳·선택을 되살림
-        long head = g_fillHeadCp, gtop = TopChar(g_dst) + head;
-        CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
-        wstring full;
-        full.swap(g_fillSrc);
-        KillTimer(g_hwnd, TIMER_FILL);
-        g_fillPending = false;
-        g_fillAt = g_fillHeadEnd = 0;
-        g_fillHeadCp = 0;
-        SetRichText(g_dst, full);
-        bool os = g_syncing; g_syncing = true;
-        CHARRANGE nr = {cr.cpMin + head, cr.cpMax + head};
-        SendMessageW(g_dst, EM_EXSETSEL, 0, (LPARAM)&nr);
-        g_syncing = os;
-        ScrollToChar(g_dst, gtop);
-        InvalidateRect(g_hwnd, nullptr, FALSE);
-    } else {
-        while (!FillStep((size_t)-1 / 2)) {}
-        EndDstFill();
-    }
-    SetCursor(oc);
-}
-// 읽기 모드: 큰 글은 need(곧 보여 줄 글자 위치) 둘레를 먼저 넣고, 나머지는 뒤에서 이어 넣음
-static void SetDstProgressive(const wstring& w, long need) {
-    StopDstFill();
-    size_t n = w.size();
-    bool small = n < kFillFirst + kFillFirst / 2;
-    // 대신 그릴 글꼴이 필요한 글(간체자 등)은 글꼴 지정을 한 번에 해야 하므로 예전처럼 한 번에
-    if (small || FontLacksGlyphs(EditFontOf(g_dst), w) || _wcsnicmp(w.c_str(), L"{\\rtf", 5) == 0) { SetRichText(g_dst, w); return; }
-    if (need < 0) need = 0;
-    long headWant = need > 100000 ? need - 50000 : 0;  // 읽을 곳 조금 앞부터 (처음 가까우면 처음부터)
-    size_t i = 0, hs = 0;
-    long cp = 0;
-    auto step = [&]() { if (w[i] == L'\r' && i + 1 < n && w[i + 1] == L'\n') i += 2; else ++i; ++cp; };
-    while (i < n && cp < headWant) step();
-    while (i > 0 && w[i - 1] != L'\n') --i;  // 줄 처음으로 (글자 수는 아래에서 다시 셈)
-    hs = i;
-    long headCp = CpCount(w, 0, hs);
-    cp = headCp;
-    long want = std::max(need, headCp) + (long)kFillFirst;
-    while (i < n && (cp < want || i - hs < kFillFirst)) step();
-    while (i < n && w[i - 1] != L'\n') ++i;  // 줄 끝까지
-    if (hs == 0 && i + kFillChunk >= n) { SetRichText(g_dst, w); return; }  // 남는 게 적으면 한 번에
-    SetRichText(g_dst, w.substr(hs, i - hs));
-    g_fillSrc = w;
-    g_fillAt = i;
-    g_fillHeadEnd = hs;
-    g_fillHeadCp = headCp;
-    g_fillTotalCp = CpCount(w, 0, n);
-    g_fillPending = g_fillAt < n || g_fillHeadEnd > 0;
-    if (g_fillPending) SetTimer(g_hwnd, TIMER_FILL, kFillGapMs, nullptr);
-    else wstring().swap(g_fillSrc);
-}
-// 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 / 읽기 모드는 끝까지 (큰 글은 앞부분부터 이어 넣기)
-// need: 곧 보여 줄 글자 위치 (그곳까지는 바로 넣음)
-static void ShowResultText(long need = 0) {
-    if (g_reading) {
-        SetDstProgressive(U32ToW(g_out, true), need);
-    } else if (!g_preview) {
+// 결과 창의 맨 위 글자 위치
+static long GlobalTop() { return TopChar(g_dst); }
+static void GoToGlobal(long idx) { ScrollToChar(g_dst, idx < 0 ? 0 : idx); }
+// 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 (읽기 모드는 큰 글도 처음부터 끝까지 한 번에)
+static void ShowResultText() {
+    if (!g_preview || g_reading) {
         SetRichText(g_dst, U32ToW(g_out, true));
     } else {
         size_t oc = g_prevSrcEnd < g_srcToOut.size() ? (size_t)g_srcToOut[g_prevSrcEnd] : g_out.size();
@@ -1814,30 +1619,7 @@ static void ShowResultText(long need = 0) {
         SetRichText(g_dst, U32ToW(g_out.substr(0, oc), true) + PreviewNote(g_out.size()));
     }
 }
-// 읽기 모드에서 큰 글을 열 때: 글 전체 정리가 끝나기 전에, 읽을 곳 둘레만 먼저 정리해 바로 보여 줌
-// (정리 모드가 원본 칸을 먼저 보여 주는 것처럼). 전체 정리가 끝나면 그 결과로 바꿈
-static bool g_quickPreview = false;
-static void ShowQuickPreview() {
-    if (!g_reading || !g_busy || g_text.empty()) return;
-    size_t n = g_text.size(), a = 0;
-    if (g_wantIdx > 0 && g_wantLen > 0) {  // 지난번 읽던 곳: 원본에서 대략 같은 비율의 자리부터
-        double f = std::min(1.0, (double)g_wantIdx / (double)g_wantLen);
-        a = (size_t)(f * (double)n);
-        while (a > 0 && g_text[a - 1] != '\n') --a;
-    }
-    size_t b = std::min(n, a + 150000);
-    if (b < n) { size_t lim = std::min(n, b + 20000); while (b < lim && g_text[b] != '\n') ++b; }
-    TidyOptions o = ReadOptions();
-    U32 part = TidyProcess(g_text.substr(a, b - a), o, nullptr);
-    SetRichText(g_dst, U32ToW(part, true));
-    g_quickPreview = true;
-    g_readPct = -1;
-    RedrawWindow(g_dst, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-}
 static void FinishReprocess(ProcJob& j) {
-    bool wasQuick = g_quickPreview && !(g_newDoc && g_wantIdx > 0);  // 처음부터 미리 본 경우: 넘긴 쪽을 이어서
-    long quickTop = wasQuick ? TopChar(g_dst) : 0;
-    g_quickPreview = false;
     long keepTop = g_newDoc ? -1 : GlobalTop(), keepOutLen = (long)g_out.size();
     g_out.swap(j.out);
     g_outToSrc.swap(j.map);
@@ -1847,8 +1629,8 @@ static void FinishReprocess(ProcJob& j) {
     long newLen = (long)g_out.size();
     auto scaled = [&](long idx, long oldLen) { return (oldLen > 0 && oldLen != newLen) ? (long)((double)idx * newLen / oldLen) : idx; };
     bool restoring = g_newDoc && g_wantIdx > 0;
-    long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : wasQuick ? quickTop : 0;
-    ShowResultText(target);
+    long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : 0;
+    ShowResultText();
     g_dstDirty = false;
 
     g_metaSrc = g_epub ? wstring(L"EPUB") : wstring(kEncName[g_enc]);
@@ -2020,7 +1802,6 @@ static bool LoadFile(const wstring& path) {
     AddRecent(path);
     UpdateTitle();
     Reprocess();
-    ShowQuickPreview();  // 읽기 모드의 큰 글: 정리가 끝나기 전에 읽을 곳부터 먼저
     if (!g_busy) { SetStatus(L"열었습니다: " + path + g_restoreNote); g_restoreNote.clear(); }
     return true;
 }
@@ -2618,9 +2399,6 @@ static HWND MkCombo(int id, std::initializer_list<const wchar_t*> items, int sel
 // 칸이 새로 만들어질 수 있으므로 바로 열지 않고 메인 창에 넘김
 static bool RpUndoAll();
 static LRESULT CALLBACK DropProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
-    if (h == g_dst && g_fillPending &&  // 모두 선택·복사·Ctrl+End 등은 글 전체를 다 넣은 뒤에
-        ((msg == WM_KEYDOWN && GetKeyState(VK_CONTROL) < 0) || msg == WM_COPY || msg == WM_CUT))
-        FinishDstFill();
     if (msg == WM_DROPFILES) {
         if (!PostMessageW(g_hwnd, WM_DROPFILES, wp, 0)) DragFinish((HDROP)wp);
         return 0;
@@ -2688,7 +2466,6 @@ static wstring PosKey(const wstring& path) {
     return buf;
 }
 static void SaveReadPos() {
-    if (g_quickPreview) return;  // 아직 미리 보기 (위치가 정리 결과와 다름)
     if (g_posPath.empty() || g_ini.empty() || g_out.empty() || RichLen(g_dst) <= 0) return;
     long top = GlobalTop();
     if (g_pendingTop > top) top = g_pendingTop;  // 큰 글을 앞부분만 보는 중이면 기억해 둔 자리 유지
@@ -2730,13 +2507,6 @@ static void LoadWantPos(const wstring& path) {
 // 읽기 모드: 한 쪽 넘김 (화면 맨 아래 줄이 다음 쪽 첫 줄이 됨)
 static void PageFlip(int dir) {
     RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
-    if (dir < 0 && g_fillPending && g_fillHeadEnd > 0 && SendMessageW(g_dst, EM_GETFIRSTVISIBLELINE, 0, 0) <= 2)
-        FinishDstFill();  // 넣은 곳의 처음: 앞부분을 먼저 넣음 (보던 곳은 그대로)
-    if (dir > 0 && g_fillPending) {  // 넣은 곳의 끝 가까이: 남은 글을 먼저 넣음
-        POINTL pb = {fr.left + 1, fr.bottom - 2};
-        long cb = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pb);
-        if (cb >= RichLen(g_dst) - 20000) FinishDstFill();
-    }
     long first = (long)SendMessageW(g_dst, EM_GETFIRSTVISIBLELINE, 0, 0);
     if (dir > 0) {  // 화면 맨 아래(잘린) 줄이 다음 쪽 맨 위로
         POINTL pt = {fr.left + 1, fr.bottom - 2};
@@ -2775,14 +2545,6 @@ static void PageFlip(int dir) {
     }
 }
 static int ReadPercent() {
-    if (g_quickPreview) return -1;  // 정리 중: 표시 안 함
-    if (g_fillPending && g_fillTotalCp > 0) {  // 이어 넣는 중: 화면 맨 아래 글자를 글 전체 글자 수로 나눔
-        RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
-        POINTL pt = {fr.left + 1, fr.bottom - 2};
-        long ci = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pt);
-        int pct = (int)(100.0 * (ci + 1 + g_fillHeadCp) / g_fillTotalCp + 0.5);
-        return pct > 100 ? 100 : pct < 0 ? 0 : pct;
-    }
     SCROLLINFO si = {sizeof(si), SIF_ALL};
     if (!GetScrollInfo(g_dst, SB_VERT, &si) || si.nMax <= si.nMin) return RichLen(g_dst) > 0 ? 100 : 0;
     double span = (double)si.nMax - si.nMin + 1;
@@ -2805,11 +2567,6 @@ static bool InFlipZone(HWND h, int y, int* dir) {
 static void SetFullscreen(bool on);
 static void StepFontSize(int dir);
 static LRESULT CALLBACK DstProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
-    if (g_reading && g_fillPending && g_fillHeadEnd > 0 && !g_inFill &&  // 넣은 곳의 맨 위에서 더 올라가려 하면 앞부분을 먼저 넣음
-        ((msg == WM_MOUSEWHEEL && GET_WHEEL_DELTA_WPARAM(wp) > 0 && !(GET_KEYSTATE_WPARAM(wp) & MK_CONTROL)) || msg == WM_VSCROLL ||
-         (msg == WM_KEYDOWN && (wp == VK_UP || wp == VK_PRIOR || wp == VK_HOME))) &&
-        SendMessageW(h, EM_GETFIRSTVISIBLELINE, 0, 0) == 0)
-        FinishDstFill();
     if (g_reading) {
         int dir = 0;
         switch (msg) {
@@ -2855,7 +2612,6 @@ static void ReloadDst(long top) {
     bool fromOut = g_preview || !dirty;  // 직접 고친 적이 없으면 정리 결과에서 다시
     wstring keep;
     if (!fromOut) keep = GetRichText(g_dst);
-    StopDstFill();  // 다시 넣으므로 이어 넣던 것은 버림
     {
         bool ol = g_loading; g_loading = true;
         SETTEXTEX st = {ST_DEFAULT, 1200};
@@ -2865,7 +2621,7 @@ static void ReloadDst(long top) {
         g_loading = ol;
     }
     Layout();
-    if (fromOut) ShowResultText(top);
+    if (fromOut) ShowResultText();
     else SetRichText(g_dst, keep);
     g_dstDirty = dirty;
     GoToGlobal(top);
@@ -2934,7 +2690,6 @@ static void SetReading(bool on) {
     if (on && g_pendingTop > top) top = g_pendingTop;
     SetCursor(LoadCursor(nullptr, IDC_WAIT));
     g_reading = on;
-    g_quickPreview = false;  // 칸을 다시 채우므로 미리 보기는 끝
     if (!on && g_srcStale) FillSource();  // 읽기 모드에서 연 글: 이제 원본 칸을 채움
     SendMessageW(g_dst, EM_SETREADONLY, (on || g_preview) ? TRUE : FALSE, 0);
     ReloadDst(top);  // 글꼴·모양을 바꾸고 (큰 글은 알맞은 부분을) 다시 넣음
@@ -3192,7 +2947,6 @@ static bool IsChapterLine(const U32& t, size_t a, size_t b) {
 }
 static void ShowTocMenu(HWND anchor) {
     HideTip();
-    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     const U32& hay = FindHay();
     std::vector<size_t> pos;
     size_t a = 0;
@@ -3218,7 +2972,7 @@ static void ShowTocMenu(HWND anchor) {
     DestroyMenu(m);
     if (cmd >= ID_TOC_BASE && cmd < ID_TOC_BASE + (int)pos.size()) {
         size_t at = pos[cmd - ID_TOC_BASE];
-        GoToGlobal(CpOf(hay, at));
+        ScrollToChar(g_dst, CpOf(hay, at));
         g_readPct = -1;
     }
     SetFocus(g_dst);
@@ -3251,7 +3005,6 @@ static void SaveMarks(const std::vector<long>& v) {
     WritePrivateProfileStringW(L"mark", PosKey(g_posPath).c_str(), s.c_str(), g_ini.c_str());
 }
 static void AddMark() {
-    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     if (!g_reading) return;
     if (g_posPath.empty()) { SetStatus(L"책갈피는 파일로 연 글에서 쓸 수 있습니다."); return; }
     std::vector<long> v = LoadMarks();
@@ -3265,7 +3018,6 @@ static void AddMark() {
 }
 static void ShowMarkMenu(HWND anchor) {
     HideTip();
-    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     std::vector<long> v = LoadMarks();
     HMENU m = CreatePopupMenu();
     bool file = !g_posPath.empty();
@@ -5996,7 +5748,6 @@ static void ClearAll() {
     SetRichText(g_src, L"");
     SetRichText(g_dst, L"");
     g_srcStale = false;
-    g_quickPreview = false;
     g_dstDirty = false; g_srcPending = false;
     g_metaSrc.clear(); g_metaDst.clear(); g_sizeText.clear(); g_chips.clear();
     UpdateTitle();
@@ -6027,7 +5778,6 @@ static void CopyResult() {
 }
 // 글 칸 오른쪽 단추 메뉴
 static void ShowEditMenu(HWND ed, LPARAM lp) {
-    if (ed == g_dst) FinishDstFill();  // 모두 선택·복사가 글 전체에 되게
     bool src = ed == g_src;
     bool ro = g_preview || (g_reading && ed == g_dst);
     CHARRANGE cr; SendMessageW(ed, EM_EXGETSEL, 0, (LPARAM)&cr);
@@ -6157,22 +5907,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU:
         if ((HWND)wp == g_src || (HWND)wp == g_dst) { ShowEditMenu((HWND)wp, lp); return 0; }
         break;
-    case WM_APP + 21:  // 바꾼 글 칸의 예전 칸 지우기 (RecreateRich)
-        if (IsWindow((HWND)lp) && (HWND)lp != g_src && (HWND)lp != g_dst) DestroyWindow((HWND)lp);
-        return 0;
     case WM_APP_PROCDONE:
         OnProcDone((ProcJob*)lp);
         return 0;
     case WM_TIMER:
-        if (wp == TIMER_FILL) {  // 읽기 모드 큰 글: 뒷부분 다음 조각 이어 넣기
-            if (!g_fillPending) { KillTimer(h, TIMER_FILL); return 0; }
-            if (g_fillAt < g_fillSrc.size()) FillStep(kFillChunk);
-            if (g_fillAt >= g_fillSrc.size()) {  // 뒷부분 끝: 앞부분은 필요할 때만 (보던 화면이 밀리지 않게)
-                KillTimer(h, TIMER_FILL);
-                if (g_fillHeadEnd == 0) EndDstFill();
-            }
-            return 0;
-        }
         if (wp == TIMER_READ) {  // 읽기 모드: 읽은 곳 %
             int p = ReadPercent();
             if (p != g_readPct) { g_readPct = p; InvalidateRect(h, &g_rcDstHead, FALSE); }
