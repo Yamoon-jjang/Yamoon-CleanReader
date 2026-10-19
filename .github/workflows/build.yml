@@ -44,7 +44,7 @@ jobs:
             -DBUILD_UTC=${BUILD_UTC}LL -DBUILD_SHA="\"${GITHUB_SHA}\"" \
             -Wl,--stack,8388608 -Wl,--major-subsystem-version,6 -Wl,--minor-subsystem-version,0 \
             -Wl,--major-os-version,6 -Wl,--minor-os-version,0 -Wl,--tsaware -Wl,--dynamicbase \
-            -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp app.res -o YamoonCleanReader.exe \
+            -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp epub.cpp app.res -o YamoonCleanReader.exe \
             -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -lgdiplus -lole32 -ldwmapi -lshlwapi
           echo "BUILD_UTC=${BUILD_UTC} ($(date -u -d @${BUILD_UTC} '+%Y-%m-%d %H:%M UTC')) SHA=${GITHUB_SHA:0:8}"
       - name: Check the executable (imports, security flags, version info, no packing)

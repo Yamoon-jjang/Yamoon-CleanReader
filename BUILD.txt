@@ -1,6 +1,6 @@
 MinGW-w64 (GCC 13, win32 스레드 방식) 빌드 — src 폴더에서:
   windres app.rc -O coff -o app.res
-  g++ -O2 -std=c++17 -municode -mwindows -static -s -Wl,--stack,8388608 -Wl,--major-subsystem-version,6 -Wl,--minor-subsystem-version,0 -Wl,--major-os-version,6 -Wl,--minor-os-version,0 -Wl,--tsaware -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp app.res -o YamoonCleanReader.exe -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -lgdiplus -lole32 -ldwmapi -lshlwapi
+  g++ -O2 -std=c++17 -municode -mwindows -static -s -Wl,--stack,8388608 -Wl,--major-subsystem-version,6 -Wl,--minor-subsystem-version,0 -Wl,--major-os-version,6 -Wl,--minor-os-version,0 -Wl,--tsaware -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va main.cpp engine.cpp epub.cpp app.res -o YamoonCleanReader.exe -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -lgdiplus -lole32 -ldwmapi -lshlwapi
 
   (리눅스에서 교차 빌드할 때는 x86_64-w64-mingw32-windres, x86_64-w64-mingw32-g++-win32 사용.
    Ubuntu 24.04의 g++-mingw-w64-x86-64-win32 패키지가 GCC 13 win32 방식입니다.)

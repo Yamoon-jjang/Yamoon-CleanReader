@@ -23,6 +23,7 @@
 #include <shlwapi.h>
 #include <shlobj.h>
 #include "engine.h"
+#include "epub.h"
 
 using std::wstring;
 typedef std::u32string U32;
@@ -43,11 +44,11 @@ static UINT EncCp(int enc) {
 enum {
     ID_OPEN = 100, ID_SAVE, ID_SAVEAS, ID_BATCH, ID_HINT,
     ID_BLANK, ID_JOIN, ID_SPACE, ID_SPLIT, ID_LONGLEN, ID_SYNC, ID_PARASEP, ID_INDENT, ID_COLLAPSE, ID_JUNK, ID_ENC,
-    ID_QUOTE, ID_ELLIPSIS, ID_HANJA, ID_HALF, ID_READENC, ID_RULES, ID_FOLD, ID_ABOUT, ID_ABOUT_OK, ID_SCENE, ID_RESET,
+    ID_QUOTE, ID_ELLIPSIS, ID_HANJA, ID_HALF, ID_READENC, ID_FOLD, ID_ABOUT, ID_ABOUT_OK, ID_SCENE, ID_RESET,
     ID_SRC, ID_DST, ID_PASTE, ID_CLEAR, ID_COPYALL,
     ID_M_CUT, ID_M_COPY, ID_M_PASTE, ID_M_SELALL,
-    ID_READ, ID_MODE_TIDY, ID_VRESET, ID_RTOC, ID_RFIND, ID_RMARK, ID_RFULL, ID_FEDIT, ID_FPREV, ID_FNEXT, ID_FCLOSE,
-    ID_MARK_ADD, ID_MARK_CLEAR, ID_THEME, ID_RECENT, ID_RECENT_CLEAR, ID_THEME_SYS, ID_THEME_LIGHT, ID_THEME_DARK, ID_SIZE_UP, ID_SIZE_DOWN, ID_VFONT, ID_VSIZE, ID_VCOLOR, ID_VFG, ID_VBG, ID_VLINE, ID_VMARGIN,
+    ID_READ, ID_MODE_TIDY, ID_VRESET, ID_RTOC, ID_RFIND, ID_RMARK, ID_RFULL,
+    ID_MARK_ADD, ID_MARK_CLEAR, ID_THEME, ID_RECENT, ID_RECENT_CLEAR, ID_THEME_SYS, ID_THEME_LIGHT, ID_THEME_DARK, ID_SIZE_UP, ID_SIZE_DOWN, ID_VFONT, ID_VSIZE, ID_VCOLOR, ID_VFG, ID_VBG, ID_VLINE, ID_VMARGIN, ID_VBOLD,
     TIMER_LONG = 1, TIMER_SRC = 2, TIMER_SAVED = 3, TIMER_READ = 4,
     ID_TOC_BASE = 20000, ID_MARK_BASE = 24000, ID_RECENT_BASE = 28000  // 목차·책갈피 메뉴 항목
 };
@@ -70,7 +71,7 @@ namespace col { extern COLORREF editText, editBg; }
 static HWND g_cbBlank, g_cbJoin, g_cbSpace, g_cbSplit, g_edLong, g_chkSync, g_cbParaSep, g_cbIndent, g_chkCollapse, g_chkJunk, g_cbEnc;
 static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머리의 작은 단추
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
-static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnRules, g_btnFold, g_btnAbout, g_btnReset;
+static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
 static const wchar_t* kVersion = L"2.1";
 static const wchar_t* kDate = L"2026년 10월 13일";
@@ -125,23 +126,20 @@ static int S(int v) { return MulDiv(v, g_dpi, 96); }
 // 읽기 모드 · 보기 설정 (글꼴, 크기, 색, 줄 간격, 여백)
 static bool g_reading = false;                 // 읽기 모드: 결과 창만 크게
 static HWND g_btnToc, g_btnFind, g_btnMark, g_btnFull;          // 읽기 칸 머리: 목차·찾기·책갈피·전체 화면
-static HWND g_edFind, g_btnFPrev, g_btnFNext, g_btnFClose;       // 찾기 줄
-static bool g_findOpen = false, g_fullscreen = false;
-static RECT g_rcFindBox, g_rcFindInfo;
-static wstring g_findInfo;
-static HWND g_btnRead, g_btnTidy, g_btnVReset, g_cbVFont, g_cbVSize, g_cbVColor, g_btnVFg, g_btnVBg, g_cbVLine, g_cbVMargin;
+static bool g_fullscreen = false;
+static HWND g_btnRead, g_btnTidy, g_btnVReset, g_cbVFont, g_cbVSize, g_cbVColor, g_btnVFg, g_btnVBg, g_cbVLine, g_cbVMargin, g_btnVBold;
 static wstring g_vFont = L"맑은 고딕";
-static int g_vSize = 11, g_vColor = 0, g_vLine = 0, g_vMargin = 1;
+static int g_vSize = 11, g_vColor = 0, g_vLine = 1, g_vMargin = 1;  // g_vLine: 0 좁게 1 보통 2 조금 넓게 3 넓게 4 아주 넓게
+static bool g_vBold = false;                   // 읽기 모드 글자 굵게
 static COLORREF g_vfg = RGB(30, 30, 30), g_vbg = RGB(255, 255, 255);  // 사용자 지정 색
 static COLORREF g_custCols[16];
 static std::vector<wstring> g_fontNames;
 static const int kSizes[] = {9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 28};
-static const int kLineSp[] = {0, 30, 60, 100};  // 줄 간격: 줄 뒤에 더하는 여백 (글자 크기의 %)
+static const int kLineSp[] = {0, 30, 60, 100};  // 줄 간격 보통~아주 넓게: 줄 뒤에 더하는 여백 (글자 크기의 %)
+static const int kNarrowPct = 90;              // 줄 간격 좁게: 한 줄 높이의 90%
 static bool g_newDoc = true;                   // 새 글이면 결과 창을 처음부터 (아니면 보던 곳 유지)
 static long g_wantIdx = -1, g_wantLen = 0;     // 다시 연 파일의 지난번 읽던 곳
 static long g_pendingTop = -1;                 // 큰 글: 정리 모드(앞부분만)에서 못 간 읽던 곳 → 읽기 모드에서 감
-static size_t g_readBase = 0, g_readEnd = 0;   // 결과 창에 보이는 부분 [base, end) (전체를 보이면 0 ~ 끝)
-static bool g_sectioned = false;               // 읽기 모드의 큰 글: 부분씩 보여 주는 중
 static wstring g_posPath;                      // 결과 창에 보이는 글의 파일
 static wstring g_restoreNote;                  // "지난번 읽던 곳으로 이동" 알림
 static int g_readPct = -1;
@@ -151,8 +149,8 @@ static void LoadWantPos(const wstring& path);
 static int ReadPercent();
 // 색 조합: 0 기본 1 아이보리 2 세피아 3 보호 녹색 4 종이 회색 5 연하늘 6 저녁(앰버) 7 어두운 화면 8 사용자 지정
 static const int kColorCustom = 8;
-static void ViewColors(COLORREF& fg, COLORREF& bg) {
-    switch (g_vColor) {
+static void ViewColorsOf(int idx, COLORREF& fg, COLORREF& bg) {
+    switch (idx) {
     case 1: fg = RGB(51, 51, 51);    bg = RGB(250, 246, 236); break;  // 아이보리
     case 2: fg = RGB(91, 70, 54);    bg = RGB(244, 236, 216); break;  // 세피아
     case 3: fg = RGB(34, 51, 34);    bg = RGB(199, 237, 204); break;  // 보호 녹색
@@ -164,8 +162,9 @@ static void ViewColors(COLORREF& fg, COLORREF& bg) {
     default: fg = col::editText; bg = col::editBg; break;  // 기본: 화면 테마 색
     }
 }
+static void ViewColors(COLORREF& fg, COLORREF& bg) { ViewColorsOf(g_vColor, fg, bg); }
 static HFONT MakeReadFont() {
-    return CreateFontW(-MulDiv(g_vSize * 10, g_dpi, 720), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
+    return CreateFontW(-MulDiv(g_vSize * 10, g_dpi, 720), 0, 0, 0, g_vBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0,
                        g_vFont.c_str());
 }
 static std::wstring RawRichText(HWND h, bool crlf);
@@ -191,11 +190,21 @@ static void BuildCoverage(HFONT f, std::vector<unsigned char>& cov) {
     ReleaseDC(nullptr, dc);
     if (!ok) std::fill(cov.begin(), cov.end(), 0xFF);
 }
+// 두 글꼴(정리 칸·읽기 칸)까지 기억: 번갈아 물어도 다시 만들지 않음.
+// 글꼴 핸들은 지운 뒤 다른 글꼴에 다시 쓰일 수 있으므로 글꼴 이름·굵기로 구별함
 static const std::vector<unsigned char>& CoverageOf(HFONT f) {
-    static HFONT cached = nullptr;
-    static std::vector<unsigned char> cov;
-    if (f != cached || cov.empty()) { BuildCoverage(f, cov); cached = f; }
-    return cov;
+    static wstring key[2];
+    static std::vector<unsigned char> cov[2];
+    static int next = 0;
+    LOGFONTW lf = {};
+    wstring k0;
+    if (f && GetObjectW(f, sizeof(lf), &lf)) k0 = wstring(lf.lfFaceName) + L"|" + std::to_wstring(lf.lfWeight) + L"|" + std::to_wstring(lf.lfCharSet);
+    if (!k0.empty())
+        for (int i = 0; i < 2; ++i) if (key[i] == k0 && !cov[i].empty()) return cov[i];
+    int k = next; next ^= 1;
+    BuildCoverage(f, cov[k]);
+    key[k] = k0;  // 알 수 없는 글꼴(빈 이름)은 다음에 다시 만듦
+    return cov[k];
 }
 static bool HasGlyph(const std::vector<unsigned char>& cov, unsigned c) { return c < 65536 && (cov[c >> 3] & (1 << (c & 7))) != 0; }
 // 따로 그릴 필요가 없는 글자: 제어 문자·공백·보이지 않는 서식 문자 (제로폭 등은 원래 글꼴에 그대로 둠)
@@ -420,10 +429,12 @@ static void ApplyEditLook(HWND h) {
     PARAFORMAT2 pf = {};
     pf.cbSize = sizeof(pf);
     pf.dwMask = PFM_SPACEAFTER | PFM_LINESPACING;  // 줄(문단) 뒤 여백: 글자 크기에 비례
-    int lsp = view ? kLineSp[(g_vLine >= 0 && g_vLine < 4) ? g_vLine : 0] : 0;  // 줄 간격은 읽기 모드에서만
+    int vl = (g_vLine >= 0 && g_vLine <= 4) ? g_vLine : 1;
+    int lsp = (view && vl >= 1) ? kLineSp[vl - 1] : 0;  // 줄 간격은 읽기 모드에서만
+    bool narrow = view && vl == 0;                     // 좁게: 줄 높이를 글꼴 높이의 90%로 고정
     pf.dySpaceAfter = g_vSize * 20 * lsp / 100;  // twips
-    // 정리 모드: 줄 높이를 글꼴 높이로 고정 (원본·결과 칸이 같은 간격). 읽기 모드는 예전처럼 한 줄 간격
-    LONG fixedLine = view ? 0 : EditLineTwips(h, EditFontOf(h));
+    // 정리 모드: 줄 높이를 글꼴 높이로 고정 (원본·결과 칸이 같은 간격). 읽기 모드는 예전처럼 한 줄 간격 (좁게만 90%로 고정)
+    LONG fixedLine = view ? (narrow ? EditLineTwips(h, EditFontOf(h)) * kNarrowPct / 100 : 0) : EditLineTwips(h, EditFontOf(h));
     pf.bLineSpacingRule = fixedLine > 0 ? 4 : 0;  // 4: 정확히 dyLineSpacing
     pf.dyLineSpacing = fixedLine;
     static LONG lastSp[2] = {0, 0}, lastLs[2] = {-1, -1};  // 창마다 마지막으로 준 값 (바뀔 때만 전체에 적용: 큰 글에서 빠르게)
@@ -442,8 +453,13 @@ static void ApplyEditLook(HWND h) {
     g_loading = ol; g_syncing = os;
 }
 
-static const wchar_t kFilter[] =
+static const wchar_t kFilter[] =  // 저장
     L"텍스트 파일 (*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini)\0*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini\0"
+    L"모든 파일 (*.*)\0*.*\0";
+static const wchar_t kOpenFilter[] =  // 열기
+    L"텍스트·EPUB 파일 (*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini;*.epub)\0*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini;*.epub\0"
+    L"텍스트 파일 (*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini)\0*.txt;*.cap;*.text;*.log;*.asc;*.nfo;*.md;*.ini\0"
+    L"EPUB 전자책 (*.epub)\0*.epub\0"
     L"모든 파일 (*.*)\0*.*\0";
 
 // ---------------------------------------------------------------------------
@@ -466,27 +482,6 @@ static U32 Utf8ToU32(const unsigned char* p, size_t n) {
         r += cp; i += len;
     }
     return r;
-}
-static bool ValidUtf8(const unsigned char* p, size_t n) {
-    size_t i = 0;
-    while (i < n) {
-        unsigned c = p[i];
-        int len;
-        if (c < 0x80) { ++i; continue; }
-        else if (c >= 0xC2 && c <= 0xDF) len = 2;
-        else if ((c & 0xF0) == 0xE0) len = 3;
-        else if (c >= 0xF0 && c <= 0xF4) len = 4;
-        else return false;
-        if (i + len > n) return n - i < 4 && i > 0;  // 파일 끝에서 잘린 글자는 봐줌
-        for (int k = 1; k < len; ++k) if ((p[i + k] & 0xC0) != 0x80) return false;
-        if (len == 3) {
-            unsigned c1 = p[i + 1];
-            if (c == 0xE0 && c1 < 0xA0) return false;
-            if (c == 0xED && c1 >= 0xA0) return false;
-        }
-        i += len;
-    }
-    return true;
 }
 // UTF-8로 올바른 멀티바이트 글자 수와 잘못된 바이트 수
 static void Utf8Stats(const unsigned char* p, size_t n, size_t& goodMulti, size_t& bad) {
@@ -795,6 +790,7 @@ static bool WriteAll(const wstring& path, const std::string& data) {
 // 열 수 있는 파일인지 미리 검사 (파일 전체를 읽기 전에 앞부분만 보고 판단)
 static const long long kMaxOpenBytes = 100LL * 1024 * 1024;   // 여는 파일 최대 크기 (큰 파일은 앞부분만 화면에 보임)
 static const long long kMaxBatchBytes = 100LL * 1024 * 1024;  // 여러 파일 변환·합치기 최대 크기
+static const long long kMaxEpubBytes = 300LL * 1024 * 1024;  // EPUB 파일 최대 크기 (그림이 많아도 본문 글은 작음)
 static const size_t kPreviewChars = 600000;   // 이보다 긴 글은 화면에 앞부분만 표시 (정리·저장은 전체)
 static const size_t kAsyncChars = 300000;     // 이보다 긴 글은 정리를 뒤에서 돌려 창이 멈추지 않게
 
@@ -811,10 +807,22 @@ static wstring CheckTextFile(const wstring& path, long long maxBytes) {
     // 1) 확장자로 바로 알 수 있는 형식
     static const wchar_t* archive[] = {L"zip", L"rar", L"7z", L"alz", L"egg", L"gz", L"tgz", L"bz2", L"xz", L"tar", L"cab", L"iso", L"lzh", nullptr};
     static const wchar_t* exe[] = {L"exe", L"dll", L"msi", L"sys", L"com", L"scr", L"bin", L"dat", nullptr};
-    static const wchar_t* doc[] = {L"pdf", L"doc", L"docx", L"hwp", L"hwpx", L"xls", L"xlsx", L"ppt", L"pptx", L"epub", L"odt", L"rtf", nullptr};
+    static const wchar_t* doc[] = {L"pdf", L"doc", L"docx", L"hwp", L"hwpx", L"xls", L"xlsx", L"ppt", L"pptx", L"odt", L"rtf", nullptr};
     static const wchar_t* img[] = {L"jpg", L"jpeg", L"png", L"gif", L"bmp", L"webp", L"tif", L"tiff", L"ico", L"psd", L"heic", nullptr};
     static const wchar_t* media[] = {L"mp3", L"wav", L"flac", L"ogg", L"m4a", L"mp4", L"avi", L"mkv", L"mov", L"wmv", L"webm", nullptr};
     wstring e = ExtOf(path);
+    if (e == L"epub") {  // EPUB 전자책: ZIP 파일인지만 보고, 본문은 열 때 꺼냄
+        HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h == INVALID_HANDLE_VALUE) return L"파일을 열 수 없음";
+        LARGE_INTEGER sz;
+        unsigned char sig[4] = {};
+        DWORD rd = 0;
+        bool ok = GetFileSizeEx(h, &sz) && ReadFile(h, sig, 4, &rd, nullptr) && rd == 4;
+        CloseHandle(h);
+        if (!ok || memcmp(sig, "PK\x03\x04", 4) != 0) return L"손상되었거나 EPUB이 아닌 파일";
+        if (sz.QuadPart > kMaxEpubBytes) return L"EPUB 파일이 너무 큼 (최대 " + std::to_wstring(kMaxEpubBytes / (1024 * 1024)) + L"MB)";
+        return L"";
+    }
     auto in = [&](const wchar_t** l) { for (; *l; ++l) if (e == *l) return true; return false; };
     if (in(archive)) return L"압축 파일";
     if (in(exe)) return L"실행 파일 또는 데이터 파일";
@@ -877,7 +885,7 @@ static void ShowNotSupported(const wstring& path, const wstring& why) {
             std::to_wstring(kMaxOpenBytes / (1024 * 1024)) + L"MB까지 열 수 있습니다.";
     else
         m = L"지원하지 않는 파일입니다.\n\n" + FileName(path) + L"\n(" + why +
-            L")\n\n텍스트 형식의 파일(txt 등)만 열 수 있습니다.";
+            L")\n\n텍스트 파일(txt 등)과 EPUB 전자책을 열 수 있습니다.";
     MessageBoxW(g_hwnd, m.c_str(), L"야문 클린리더", MB_ICONWARNING);
 }
 
@@ -905,6 +913,23 @@ static bool LooksBinary(const U32& t) {
         if (c == 0 || c == 0xFFFD || (c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != 0x0C && c != 0x1A && c != 0x1B)) bad++;
     }
     return n > 0 && bad > 8 && bad * 100 > n;
+}
+
+// EPUB 속 문서가 UTF-8·UTF-16이 아닐 때 (드묾): 텍스트 파일과 같은 자동 판별로 읽음
+static U32 DecodeEpubDoc(const std::string& b) { int enc; return Decode(b, enc, 0); }
+static bool IsEpubPath(const wstring& p) { return ExtOf(p) == L"epub"; }
+// 파일 글 읽기: 텍스트 파일은 인코딩을 판별해 읽고, EPUB은 본문 글을 꺼냄. 실패하면 false, why에 이유
+static bool ReadTextOf(const wstring& path, const std::string& bytes, U32& text, int& enc, wstring& why) {
+    if (IsEpubPath(path)) {
+        U32 t;
+        if (!EpubExtract(bytes, t, why, DecodeEpubDoc)) return false;
+        text = NormalizeNL(t);
+        enc = E_UTF8BOM;  // 저장 인코딩 "원본과 같게": UTF-8 (BOM)
+        return true;
+    }
+    text = NormalizeNL(Decode(bytes, enc));
+    if (LooksBinary(text)) { why = L"텍스트 파일이 아님"; return false; }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,7 +1225,8 @@ static bool InsertGlyphRtf(HWND h, const wstring& ins) {
         if (used[k]) rtf += "{\\f" + std::to_string(k + 1) + "\\fnil\\fcharset" + std::to_string((int)kFallbackFonts[k].charset) + " " + std::string(kFallbackFonts[k].face, kFallbackFonts[k].face + wcslen(kFallbackFonts[k].face)) + ";}";  // 후보 이름은 모두 영문
     rtf += "}{\\colortbl;\\red" + std::to_string(GetRValue(def.crTextColor)) + "\\green" + std::to_string(GetGValue(def.crTextColor)) + "\\blue" +
            std::to_string(GetBValue(def.crTextColor)) + ";}\\pard\\sa" + std::to_string(pf.dySpaceAfter) +
-           (pf.bLineSpacingRule == 4 && pf.dyLineSpacing > 0 ? "\\sl-" + std::to_string(pf.dyLineSpacing) + "\\slmult0" : std::string()) + "\\plain\\f0\\fs" +
+           (pf.bLineSpacingRule == 4 && pf.dyLineSpacing > 0 ? "\\sl-" + std::to_string(pf.dyLineSpacing) + "\\slmult0" : std::string()) +
+           "\\plain" + (lf.lfWeight >= FW_SEMIBOLD ? "\\b" : "") + "\\f0\\fs" +
            std::to_string(halfPt) + "\\cf1 " + body + "}";
     RtfSrc src = {&rtf, 0};
     EDITSTREAM es = {(DWORD_PTR)&src, 0, RtfReadCb};
@@ -1469,7 +1495,6 @@ static void SyncFromDst(const CHARRANGE& r) {
 
 // ---------------------------------------------------------------------------
 static RECT g_rcStatus, g_rcHeader;
-static void ShowEditors(bool on);
 static void Layout();
 
 static bool g_statusOk = false;      // 상태줄 글을 초록색(완료)으로
@@ -1494,6 +1519,7 @@ static bool g_preview = false;       // 화면에 앞부분만 보이는 중
 static size_t g_prevSrcEnd = 0;      // 원본 칸에 보이는 글자 수
 static std::vector<wstring> g_mergeFiles;  // 여러 파일을 합쳐 연 경우 그 파일들 (g_path는 가상의 이름)
 static std::vector<size_t> g_mergeBounds;  // 합친 글에서 각 파일이 시작하는 위치 (파일마다 따로 판단해 정리)
+static bool g_epub = false;                 // 지금 글이 EPUB 전자책에서 꺼낸 글
 static const U32 kMergeSep = U"\n\n\n";   // 합칠 때 파일 사이
 
 // 합친 글은 파일마다 형식(빈 줄, 고정폭 등)이 다를 수 있으므로 파일별로 정리해 이어 붙임
@@ -1542,14 +1568,25 @@ static wstring PreviewNote(size_t total) {
            L"만 자는 저장할 때 모두 정리됩니다  ──────\r\n";
 }
 // 원본 칸 채우기
+// 읽기 모드에서는 원본 칸이 보이지 않으므로 비워만 두고, 정리 모드로 바꿀 때 채움 (큰 글을 여는 시간 단축)
+static bool g_srcStale = false;  // 원본 칸을 아직 채우지 않음 (읽기 모드에서 연 글)
+static void FillSource() {
+    wstring w = U32ToW(g_preview ? g_text.substr(0, g_prevSrcEnd) : g_text, true);
+    if (g_preview) w += PreviewNote(g_text.size());
+    SetRichText(g_src, w);
+    g_srcStale = false;
+}
 static void ShowSource() {
     SaveReadPos();      // 앞 글의 읽던 곳
     g_newDoc = true;
     g_preview = g_text.size() > kPreviewChars + kPreviewChars / 4;
     g_prevSrcEnd = g_preview ? PreviewCut(g_text, kPreviewChars) : g_text.size();
-    wstring w = U32ToW(g_preview ? g_text.substr(0, g_prevSrcEnd) : g_text, true);
-    if (g_preview) w += PreviewNote(g_text.size());
-    SetRichText(g_src, w);
+    if (g_reading) {
+        SetRichText(g_src, L"");
+        g_srcStale = !g_text.empty();
+    } else {
+        FillSource();
+    }
     SendMessageW(g_src, EM_SETREADONLY, g_preview ? TRUE : FALSE, 0);
     SendMessageW(g_dst, EM_SETREADONLY, (g_preview || g_reading) ? TRUE : FALSE, 0);
 }
@@ -1566,57 +1603,18 @@ struct ProcJob {
 };
 static void AfterTextChange();
 
-// 읽기 모드의 큰 글은 약 kPreviewChars씩 나눠 보여 줌 (쪽을 넘기다 끝에 닿으면 다음 부분으로)
-static size_t SectionEndFrom(size_t base) {
-    size_t n = g_out.size();
-    size_t e = std::min(n, base + kPreviewChars);
-    if (e < n) {  // 줄 끝에서 자름
-        size_t lim = std::min(n, e + 20000);
-        while (e < lim && g_out[e] != '\n') ++e;
-        if (e < n) ++e;
-    }
-    return e;
-}
-static size_t SectionStartFor(size_t idx) {
-    size_t b = 0;
-    for (int guard = 0; guard < 100000; ++guard) {
-        size_t e = SectionEndFrom(b);
-        if (idx < e || e >= g_out.size() || e <= b) return b;
-        b = e;
-    }
-    return b;
-}
-static void ShowSection(size_t base) {
-    g_readBase = base;
-    g_readEnd = SectionEndFrom(base);
-    wstring w = U32ToW(g_out.substr(base, g_readEnd - base), true);
-    if (g_readEnd < g_out.size()) w += L"\r\n──────  다음 부분으로 이어집니다 · 아래쪽을 클릭하거나 Space  ──────\r\n";
-    SetRichText(g_dst, w);
-}
-// 글 전체에서의 위치 (부분씩 보일 때도)
-static long GlobalTop() { return (long)g_readBase + TopChar(g_dst); }
-static void GoToGlobal(long idx) {
-    if (idx < 0) idx = 0;
-    if (g_sectioned) {
-        size_t b = SectionStartFor((size_t)idx);
-        if (b != g_readBase) ShowSection(b);
-    }
-    ScrollToChar(g_dst, idx - (long)g_readBase);
-}
-// 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 / 읽기 모드에서 globalTop이 든 부분
-static void ShowResultText(long globalTop = 0) {
-    g_sectioned = false;  // 읽기 모드는 큰 글도 처음부터 끝까지 한 번에 (정리 모드만 앞부분 표시)
+// 결과 창의 맨 위 글자 위치
+static long GlobalTop() { return TopChar(g_dst); }
+static void GoToGlobal(long idx) { ScrollToChar(g_dst, idx < 0 ? 0 : idx); }
+// 결과 창에 글 넣기: 보통은 전체, 큰 글은 정리 모드에서 앞부분만 (읽기 모드는 큰 글도 처음부터 끝까지 한 번에)
+static void ShowResultText() {
     if (!g_preview || g_reading) {
-        g_readBase = 0; g_readEnd = g_out.size();
         SetRichText(g_dst, U32ToW(g_out, true));
-    } else if (g_reading) {
-        ShowSection(SectionStartFor((size_t)std::max(0L, globalTop)));
     } else {
         size_t oc = g_prevSrcEnd < g_srcToOut.size() ? (size_t)g_srcToOut[g_prevSrcEnd] : g_out.size();
         if (oc > g_out.size()) oc = g_out.size();
         size_t lim = std::min(g_out.size(), oc + 20000);
         while (oc < lim && g_out[oc] != '\n') ++oc;
-        g_readBase = 0; g_readEnd = oc;
         SetRichText(g_dst, U32ToW(g_out.substr(0, oc), true) + PreviewNote(g_out.size()));
     }
 }
@@ -1631,10 +1629,10 @@ static void FinishReprocess(ProcJob& j) {
     auto scaled = [&](long idx, long oldLen) { return (oldLen > 0 && oldLen != newLen) ? (long)((double)idx * newLen / oldLen) : idx; };
     bool restoring = g_newDoc && g_wantIdx > 0;
     long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : 0;
-    ShowResultText(target);
+    ShowResultText();
     g_dstDirty = false;
 
-    g_metaSrc = wstring(kEncName[g_enc]);
+    g_metaSrc = g_epub ? wstring(L"EPUB") : wstring(kEncName[g_enc]);
     {   // 연 파일의 크기 (여러 파일을 합쳐 열었으면 합친 크기, 붙여넣은 글은 없음)
         long long bytes = 0;
         auto add = [&](const wstring& f) {
@@ -1675,7 +1673,7 @@ static void FinishReprocess(ProcJob& j) {
     {   // 보던 곳 유지 · 다시 연 파일은 지난번 읽던 곳으로
         if (g_newDoc) g_pendingTop = -1;
         if (target > 0) {
-            if (g_preview && !g_sectioned && target >= RichLen(g_dst) - 1) {  // 정리 모드에서 앞부분 밖: 읽기 모드에서 감
+            if (g_preview && target >= RichLen(g_dst) - 1) {  // 정리 모드에서 앞부분 밖: 읽기 모드에서 감
                 g_pendingTop = target;
                 if (restoring) g_restoreNote = L"   ·   지난번 읽던 곳은 읽기 모드에서 이어 볼 수 있습니다";
             } else {
@@ -1787,16 +1785,17 @@ static bool LoadFile(const wstring& path) {
         MessageBoxW(g_hwnd, (L"파일을 열 수 없습니다:\n" + path).c_str(), L"야문 클린리더", MB_ICONERROR);
         return false;
     }
-    int enc;
-    U32 text = NormalizeNL(Decode(bytes, enc));
-    if (LooksBinary(text)) { ShowNotSupported(path, L"텍스트 파일이 아님"); return false; }
+    int enc = E_UTF8;
+    U32 text;
+    if (!ReadTextOf(path, bytes, text, enc, why)) { ShowNotSupported(path, why); return false; }
+    std::string().swap(bytes);
     g_text.swap(text);
+    g_epub = IsEpubPath(path);
     g_enc = enc;
     g_path = path;
     g_mergeFiles.clear();
     g_mergeBounds.clear();
     g_lastSaved.clear();
-    ShowEditors(true);
     ShowSource();
     LoadWantPos(path);
     AddRecent(path);
@@ -1902,9 +1901,9 @@ static bool LoadMerged(const std::vector<wstring>& files, HWND owner) {
                         L"여러 파일 합치기", MB_ICONWARNING);
             return false;
         }
-        int enc;
-        U32 t = NormalizeNL(Decode(bytes, enc));
-        if (LooksBinary(t)) { bad += L"\n" + FileName(f) + L"  (텍스트 파일이 아님)"; continue; }
+        int enc = E_UTF8;
+        U32 t;
+        if (!ReadTextOf(f, bytes, t, enc, why)) { bad += L"\n" + FileName(f) + L"  (" + why + L")"; continue; }
         if (firstEnc < 0) firstEnc = enc;
         while (!t.empty() && t.back() == '\n') t.pop_back();
         if (!all.empty()) all += kMergeSep;  // 파일 사이는 빈 줄 두 개 (장면 구분처럼)
@@ -1921,6 +1920,7 @@ static bool LoadMerged(const std::vector<wstring>& files, HWND owner) {
     g_enc = firstEnc < 0 ? E_UTF8 : firstEnc;
     g_mergeFiles = used;
     g_mergeBounds = bounds;
+    g_epub = false;
     g_path = MergedPath(used);
     g_lastSaved.clear();
     ShowSource();
@@ -1940,7 +1940,7 @@ static void DoOpen() {
     OPENFILENAMEW of = {};
     of.lStructSize = sizeof(of);
     of.hwndOwner = g_hwnd;
-    of.lpstrFilter = kFilter;
+    of.lpstrFilter = kOpenFilter;
     of.lpstrFile = buf;
     of.nMaxFile = MAX_PATH * 4;
     of.Flags = OFN_FILEMUSTEXIST | OFN_EXPLORER;
@@ -2237,12 +2237,11 @@ static wstring LoadRulesText() {
     U32 t = Decode(bytes, enc, 0);
     return U32ToW(NormalizeNL(t), true);
 }
-static int RuleCount() { return (int)(g_ruleReplace.size() + g_ruleDelete.size() + g_ruleRegex.size() + g_ruleRegexDel.size()); }
 
 // ---------------------------------------------------------------------------
 // 컨트롤
 static bool g_fold = false;
-struct PanelItem { RECT rc; wstring text; int kind; };  // 0 그룹 제목, 1 라벨, 2 흐린 설명
+struct PanelItem { RECT rc; wstring text; int kind; int icon = 0; };  // kind 0 그룹 제목, 1 라벨, 2 흐린 설명, 3 이름표 아이콘(icon)
 static std::vector<PanelItem> g_items;
 static std::vector<PanelItem> g_readItems;  // 읽기 모드 보기 설정 줄의 이름표
 static RECT g_rcLongBox;                    // 글자 수 칸 테두리
@@ -2253,7 +2252,7 @@ static std::vector<int> g_toolSeps;    // 도구줄 묶음 사이 세로선 x
 static int g_panelNeedW = 0, g_viewNeedW = 0;  // 옵션 칸 / 보기 설정 줄이 한 줄에 들어가는 창 안쪽 폭
 static std::vector<RECT> g_viewSeps;  // 보기 설정 줄 묶음 사이 세로선
 static int g_toolBtnLeft = 0;          // 도구줄 버튼들의 왼쪽 끝
-static RECT g_rcTool, g_rcPanel, g_rcSrcHead, g_rcDstHead, g_rcRulesInfo;
+static RECT g_rcTool, g_rcPanel, g_rcSrcHead, g_rcDstHead;
 static std::vector<RECT> g_chipRc;
 static std::vector<int> g_chipIdx;
 
@@ -2303,6 +2302,20 @@ static HWND MkCheck(int id, const wchar_t* text, bool on) {
     SetToggle(h, on);
     return h;
 }
+// 배색 목록 항목: 그 배색의 바탕색 위에 이름을 글자색으로 (색과 이름이 함께 보여 따로 설명이 필요 없음)
+static void DrawColorChip(HDC dc, RECT r, int idx, COLORREF edge) {
+    COLORREF fg, bg;
+    ViewColorsOf(idx, fg, bg);
+    {
+        Graphics g(dc);
+        g.SetSmoothingMode(SmoothingModeAntiAlias);
+        FillRound(g, r, S(3), bg, edge);
+    }
+    wchar_t buf[128];
+    int n = (int)SendMessageW(g_cbVColor, CB_GETLBTEXT, idx, (LPARAM)buf);
+    RECT tr = {r.left + S(8), r.top, r.right - S(4), r.bottom};
+    DrawTxt(dc, wstring(buf, n > 0 ? n : 0), tr, g_uiFont, fg, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+}
 // 선택목록: 닫힌 모양을 직접 그림 (둥근 테두리 + 가는 화살표, 마우스를 올리면 테두리 강조)
 static LRESULT CALLBACK ComboProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR ref) {
     switch (msg) {
@@ -2333,7 +2346,10 @@ static LRESULT CALLBACK ComboProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_P
                 g.DrawLines(&pen, pts, 3);
             }
             int sel = (int)SendMessageW(h, CB_GETCURSEL, 0, 0);
-            if (sel >= 0) {
+            if (sel >= 0 && h == g_cbVColor) {
+                RECT cr = {S(4), S(3), w - S(24), hh - S(3)};
+                DrawColorChip(dc, cr, sel, col::swatchEdge);
+            } else if (sel >= 0) {
                 wchar_t buf[128];
                 int n = (int)SendMessageW(h, CB_GETLBTEXT, sel, (LPARAM)buf);
                 RECT tr = {S(9), 0, w - S(24), hh};
@@ -2436,13 +2452,6 @@ static HWND MkRich(int id) {
     return h;
 }
 
-static void ShowEditors(bool) {}  // 편집창은 늘 보임
-
-static void UpdateRulesButton() {
-    int n = RuleCount();
-    SetWindowTextW(g_btnRules, n ? (L"바꾸기·지우기 목록 (" + std::to_wstring(n) + L")").c_str() : L"바꾸기·지우기 목록…");
-    InvalidateRect(g_btnRules, nullptr, FALSE);
-}
 
 // ---------------------------------------------------------------------------
 // 읽던 위치 기억 (파일마다)
@@ -2501,11 +2510,6 @@ static void PageFlip(int dir) {
     if (dir > 0) {  // 화면 맨 아래(잘린) 줄이 다음 쪽 맨 위로
         POINTL pt = {fr.left + 1, fr.bottom - 2};
         long ci = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&pt);
-        if (g_sectioned && g_readEnd < g_out.size() && ci >= RichLen(g_dst) - 2) {  // 이 부분의 끝: 다음 부분으로
-            ShowSection(g_readEnd);
-            ScrollToChar(g_dst, 0);
-            ci = -1;
-        }
         long last = (long)SendMessageW(g_dst, EM_EXLINEFROMCHAR, 0, ci);
         if (last <= first) last = first + 1;
         long total = (long)SendMessageW(g_dst, EM_GETLINECOUNT, 0, 0);
@@ -2516,9 +2520,6 @@ static void PageFlip(int dir) {
         }
         long c = (long)SendMessageW(g_dst, EM_LINEINDEX, last, 0);
         if (c >= 0 && ci >= 0) ScrollToChar(g_dst, c);
-    } else if (first == 0 && g_sectioned && g_readBase > 0) {  // 이 부분의 처음: 앞 부분의 끝으로
-        ShowSection(SectionStartFor(g_readBase - 1));
-        SendMessageW(g_dst, WM_VSCROLL, SB_BOTTOM, 0);
     } else if (first > 0) {  // 지금 맨 위 줄이 앞쪽 화면의 맨 아래 줄이 되도록
         long fc = (long)SendMessageW(g_dst, EM_LINEINDEX, first, 0);
         POINTL a = {}, b = {};
@@ -2549,8 +2550,6 @@ static int ReadPercent() {
     double seen = (double)si.nPos - si.nMin + std::max<UINT>(si.nPage, 1);
     double f = seen / span;
     if (f > 1) f = 1;
-    if (g_sectioned && !g_out.empty())  // 부분씩 보일 때는 글 전체에서의 비율
-        f = (g_readBase + f * (double)(g_readEnd - g_readBase)) / (double)g_out.size();
     int pct = (int)(f * 100.0 + 0.5);
     return pct > 100 ? 100 : pct < 0 ? 0 : pct;
 }
@@ -2564,7 +2563,6 @@ static bool InFlipZone(HWND h, int y, int* dir) {
     if (y > hh * 2 / 3) { *dir = 1; return true; }
     return false;
 }
-static void SetFindOpen(bool on);
 static void SetFullscreen(bool on);
 static void StepFontSize(int dir);
 static LRESULT CALLBACK DstProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
@@ -2584,9 +2582,8 @@ static LRESULT CALLBACK DstProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR
             if (wp == VK_SPACE) { PageFlip(GetKeyState(VK_SHIFT) < 0 ? -1 : 1); return 0; }
             if (wp == VK_NEXT) { PageFlip(1); return 0; }
             if (wp == VK_PRIOR) { PageFlip(-1); return 0; }
-            if (wp == VK_ESCAPE) {  // 찾기 → 전체 화면 → 읽기 모드 순서로 닫음
-                if (g_findOpen) SetFindOpen(false);
-                else if (g_fullscreen) SetFullscreen(false);
+            if (wp == VK_ESCAPE) {  // 전체 화면 → 읽기 모드 순서로 닫음
+                if (g_fullscreen) SetFullscreen(false);
                 else SetReading(false);
                 return 0;
             }
@@ -2623,7 +2620,7 @@ static void ReloadDst(long top) {
         g_loading = ol;
     }
     Layout();
-    if (fromOut) ShowResultText(top);
+    if (fromOut) ShowResultText();
     else SetRichText(g_dst, keep);
     g_dstDirty = dirty;
     GoToGlobal(top);
@@ -2648,7 +2645,9 @@ static void SaveView() {
     WritePrivateProfileStringW(L"opt", L"vcolor2", std::to_wstring(g_vColor).c_str(), g_ini.c_str());
     WritePrivateProfileStringW(L"opt", L"vfg", std::to_wstring((unsigned)g_vfg).c_str(), g_ini.c_str());
     WritePrivateProfileStringW(L"opt", L"vbg", std::to_wstring((unsigned)g_vbg).c_str(), g_ini.c_str());
-    WritePrivateProfileStringW(L"opt", L"vline", std::to_wstring(g_vLine).c_str(), g_ini.c_str());
+    WritePrivateProfileStringW(L"opt", L"vline2", std::to_wstring(g_vLine).c_str(), g_ini.c_str());
+    WritePrivateProfileStringW(L"opt", L"vline", std::to_wstring(std::max(0, g_vLine - 1)).c_str(), g_ini.c_str());  // 예전 판이 읽는 값 (좁게는 보통으로)
+    WritePrivateProfileStringW(L"opt", L"vbold", g_vBold ? L"1" : L"0", g_ini.c_str());
     WritePrivateProfileStringW(L"opt", L"vmargin", std::to_wstring(g_vMargin).c_str(), g_ini.c_str());
 }
 // 색 고르기 창 제목
@@ -2685,11 +2684,12 @@ static void PickViewColor(bool text) {
 static void SetFullscreen(bool on);
 static void SetReading(bool on) {
     if (on == g_reading) return;
-    if (!on) { if (g_fullscreen) SetFullscreen(false); g_findOpen = false; }
+    if (!on && g_fullscreen) SetFullscreen(false);
     long top = GlobalTop();
     if (on && g_pendingTop > top) top = g_pendingTop;
     SetCursor(LoadCursor(nullptr, IDC_WAIT));
     g_reading = on;
+    if (!on && g_srcStale) FillSource();  // 읽기 모드에서 연 글: 이제 원본 칸을 채움
     SendMessageW(g_dst, EM_SETREADONLY, (on || g_preview) ? TRUE : FALSE, 0);
     ReloadDst(top);  // 글꼴·모양을 바꾸고 (큰 글은 알맞은 부분을) 다시 넣음
     g_pendingTop = (g_preview && !on && top >= RichLen(g_dst) - 1) ? top : -1;  // 정리 모드의 앞부분 밖에서 읽던 자리는 기억
@@ -2716,15 +2716,11 @@ static bool IsInvisibleCh(char32_t u) {
            u == 0x200E || u == 0x200F || (u >= 0x202A && u <= 0x202E) || (u >= 0x2061 && u <= 0x2064) ||
            (u >= 0x2066 && u <= 0x2069) || (u >= 0xFE00 && u <= 0xFE0F);
 }
-static char32_t FoldCh(char32_t c) { return (c >= 'A' && c <= 'Z') ? c + 32 : (c >= 0xFF21 && c <= 0xFF3A) ? c + 32 : c; }
 // 찾을 글: 보통은 정리 결과 전체, 정리 모드에서 직접 고친 글이면 지금 보이는 글
 static U32 g_findHay;
 static bool g_findOnOut = true;
-static std::vector<size_t> g_findHits, g_findEnds;
-static int g_findCur = -1;
-static U32 g_findQ;
 static const U32& FindHay() {
-    g_findOnOut = g_sectioned || !g_dstDirty;
+    g_findOnOut = !g_dstDirty;
     if (g_findOnOut) return g_out;
     wstring w = GetRichText(g_dst);
     g_findHay = NormalizeNL(WToU32(w.data(), w.size()));
@@ -2732,79 +2728,34 @@ static const U32& FindHay() {
 }
 // 글 위치(코드 포인트) → 결과 칸 글자 위치 (보조 평면 글자는 칸에서 2자리)
 static long CpOf(const U32& hay, size_t idx) {
-    size_t base = (g_findOnOut && g_sectioned) ? g_readBase : 0;
-    if (idx < base) idx = base;
-    long cp = (long)(idx - base);
-    for (size_t k = base; k < idx && k < hay.size(); ++k) if (hay[k] >= 0x10000) cp++;
+    long cp = (long)idx;
+    for (size_t k = 0; k < idx && k < hay.size(); ++k) if (hay[k] >= 0x10000) cp++;
     return cp;
 }
-static void FindRun(bool fromTop) {
-    wchar_t buf[256] = {};
-    GetWindowTextW(g_edFind, buf, 255);
-    U32 q;
-    for (const wchar_t* p = buf; *p; ++p) if (!IsInvisibleCh((char32_t)(unsigned short)*p)) q += (char32_t)(unsigned short)*p;
-    const U32& hay = FindHay();
-    g_findQ = q;
-    g_findHits.clear(); g_findEnds.clear(); g_findCur = -1;
-    if (!q.empty()) {
-        char32_t f0 = FoldCh(q[0]);
-        for (size_t i = 0; i < hay.size() && g_findHits.size() < 100000; ++i) {
-            if (FoldCh(hay[i]) != f0) continue;
-            size_t j = i + 1, k = 1;
-            while (k < q.size() && j < hay.size()) {  // 글 속의 보이지 않는 문자는 건너뛰고 맞춤
-                if (IsInvisibleCh(hay[j])) { ++j; continue; }
-                if (FoldCh(hay[j]) != FoldCh(q[k])) break;
-                ++j; ++k;
-            }
-            if (k == q.size()) { g_findHits.push_back(i); g_findEnds.push_back(j); i = j - 1; }
-        }
-    }
-    if (fromTop && !g_findHits.empty()) {  // 지금 보이는 곳 다음의 첫 결과부터
-        long top = g_findOnOut ? GlobalTop() : TopChar(g_dst);
-        g_findCur = 0;
-        for (size_t i = 0; i < g_findHits.size(); ++i) if ((long)g_findHits[i] >= top) { g_findCur = (int)i; break; }
-    }
+
+// 풍선 도움말
+static HWND g_tip;
+static void AddTip(HWND b, const wchar_t* t) {
+    if (!g_tip || !b) return;
+    TOOLINFOW ti = {};
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = g_hwnd;
+    ti.uId = (UINT_PTR)b;
+    ti.lpszText = (LPWSTR)t;
+    SendMessageW(g_tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
 }
-static void FindShow() {
-    if (g_findHits.empty()) {
-        g_findInfo = g_findQ.empty() ? L"" : L"찾지 못함";
-    } else {
-        size_t s0 = g_findHits[g_findCur], e0 = g_findEnds[g_findCur];
-        const U32& hay = g_findOnOut ? g_out : g_findHay;
-        ScrollToChar(g_dst, CpOf(hay, s0));  // 이모지 등 2칸 글자를 셈
-        bool os = g_syncing; g_syncing = true;
-        SendMessageW(g_dst, EM_SETSEL, CpOf(hay, s0), CpOf(hay, e0));
-        g_syncing = os;
-        g_findInfo = std::to_wstring(g_findCur + 1) + L" / " + std::to_wstring(g_findHits.size()) + (g_findHits.size() >= 100000 ? L"+" : L"");
-    }
-    g_readPct = -1;
-    InvalidateRect(g_hwnd, &g_rcFindInfo, FALSE);
-    InvalidateRect(g_hwnd, &g_rcDstHead, FALSE);
+static void SetTip(HWND b, const wchar_t* t) {
+    if (!g_tip || !b) return;
+    TOOLINFOW ti = {};
+    ti.cbSize = sizeof(ti);
+    ti.hwnd = g_hwnd;
+    ti.uId = (UINT_PTR)b;
+    ti.lpszText = (LPWSTR)t;
+    SendMessageW(g_tip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
 }
-static void FindStep(int dir) {
-    wchar_t buf[256] = {};
-    GetWindowTextW(g_edFind, buf, 255);
-    U32 q;
-    for (const wchar_t* p = buf; *p; ++p) if (!IsInvisibleCh((char32_t)(unsigned short)*p)) q += (char32_t)(unsigned short)*p;
-    if (q != g_findQ || g_findCur < 0) FindRun(true);
-    else if (!g_findHits.empty()) g_findCur = (int)((g_findCur + dir + (int)g_findHits.size()) % (int)g_findHits.size());
-    FindShow();
-}
-static void SetFindOpen(bool on) {
-    if (on && !g_reading) return;
-    g_findOpen = on;
-    Layout();
-    if (on) { SetFocus(g_edFind); SendMessageW(g_edFind, EM_SETSEL, 0, -1); }
-    else SetFocus(g_dst);
-    InvalidateRect(g_hwnd, nullptr, FALSE);
-}
-static LRESULT CALLBACK FindEditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
-    if (msg == WM_KEYDOWN && wp == VK_RETURN) { FindStep(GetKeyState(VK_SHIFT) < 0 ? -1 : 1); return 0; }
-    if (msg == WM_KEYDOWN && wp == VK_ESCAPE) { SetFindOpen(false); return 0; }
-    if (msg == WM_CHAR && (wp == L'\r' || wp == 27)) return 0;
-    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) InvalidateRect(g_hwnd, &g_rcFindBox, FALSE);
-    return DefSubclassProc(h, msg, wp, lp);
-}
+static void HideTip() { if (g_tip) SendMessageW(g_tip, TTM_POP, 0, 0); }  // 팝업 메뉴를 열 때 풍선 도움말이 겹치지 않게
+static const wchar_t* FullTipText() { return g_fullscreen ? L"전체 화면 끝 (F11 · Esc)" : L"전체 화면 (F11)"; }
 
 // 목차: 회차·장 제목 줄
 static bool IsDigitCh(char32_t c) { return (c >= '0' && c <= '9') || (c >= 0xFF10 && c <= 0xFF19); }
@@ -2837,6 +2788,7 @@ static bool IsChapterLine(const U32& t, size_t a, size_t b) {
     return false;
 }
 static void ShowTocMenu(HWND anchor) {
+    HideTip();
     const U32& hay = FindHay();
     std::vector<size_t> pos;
     size_t a = 0;
@@ -2907,6 +2859,7 @@ static void AddMark() {
     SetStatus(L"책갈피를 추가했습니다. (" + std::to_wstring(g_out.empty() ? 0 : (int)(100.0 * top / g_out.size() + 0.5)) + L"%)");
 }
 static void ShowMarkMenu(HWND anchor) {
+    HideTip();
     std::vector<long> v = LoadMarks();
     HMENU m = CreatePopupMenu();
     bool file = !g_posPath.empty();
@@ -2945,6 +2898,7 @@ static void SetTheme(int mode) {
     RethemeSubWindows();
 }
 static void ShowThemeMenu(HWND anchor) {
+    HideTip();
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (g_themeMode == 0 ? MF_CHECKED : 0), ID_THEME_SYS, L"Windows 설정 따르기");
     AppendMenuW(m, MF_STRING | (g_themeMode == 1 ? MF_CHECKED : 0), ID_THEME_LIGHT, L"밝게");
@@ -2959,6 +2913,7 @@ static void ShowThemeMenu(HWND anchor) {
     }
 }
 static void ShowRecentMenu(HWND anchor) {
+    HideTip();
     std::vector<wstring> v = LoadRecent();
     HMENU m = CreatePopupMenu();
     if (v.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(최근에 연 파일이 없습니다)");
@@ -3004,6 +2959,7 @@ static void SetFullscreen(bool on) {
         SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     }
     SetWindowTextW(g_btnFull, g_fullscreen ? L"전체 화면 끝" : L"전체 화면");
+    SetTip(g_btnFull, FullTipText());
     Layout();
     InvalidateRect(g_hwnd, nullptr, TRUE);
     SetFocus(g_dst);
@@ -3061,8 +3017,6 @@ static void CreateUI() {
     g_btnCopyAll = MkBtn(ID_COPYALL, L"결과 복사");
     g_btnReplace = MkBtn(ID_REPLACE, L"찾기·바꾸기");
 
-    g_btnRules = MkBtn(ID_RULES, L"바꾸기·지우기 목록…");
-
     g_btnTidy = MkBtn(ID_MODE_TIDY, L"정리");
     g_btnRead = MkBtn(ID_READ, L"읽기");
     // 읽기 모드의 보기 설정
@@ -3090,18 +3044,14 @@ static void CreateUI() {
                                      L"저녁 (앰버)", L"어두운 화면", L"사용자 지정"}, g_vColor);
     g_btnVFg = MkBtn(ID_VFG, L"");
     g_btnVBg = MkBtn(ID_VBG, L"");
-    g_cbVLine = MkCombo(ID_VLINE, {L"보통", L"조금 넓게", L"넓게", L"아주 넓게"}, g_vLine);
+    g_btnVBold = MkBtn(ID_VBOLD, L"굵게");
+    g_cbVLine = MkCombo(ID_VLINE, {L"좁게", L"보통", L"조금 넓게", L"넓게", L"아주 넓게"}, g_vLine);
     g_cbVMargin = MkCombo(ID_VMARGIN, {L"좁게", L"보통", L"넓게"}, g_vMargin);
     g_btnVReset = MkBtn(ID_VRESET, L"보기 초기화");
     g_btnToc = MkBtn(ID_RTOC, L"목차");
     g_btnFind = MkBtn(ID_RFIND, L"찾기");
     g_btnMark = MkBtn(ID_RMARK, L"책갈피");
     g_btnFull = MkBtn(ID_RFULL, L"전체 화면");
-    g_edFind = Mk(L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, ID_FEDIT);
-    SetWindowSubclass(g_edFind, FindEditProc, 0, 0);
-    g_btnFPrev = MkBtn(ID_FPREV, L"이전");
-    g_btnFNext = MkBtn(ID_FNEXT, L"다음");
-    g_btnFClose = MkBtn(ID_FCLOSE, L"닫기");
 
     g_src = MkRich(ID_SRC);
     g_dst = MkRich(ID_DST);
@@ -3115,25 +3065,30 @@ static void CreateUI() {
     g_fold = IniGet(L"fold", 0) != 0;
     SetWindowTextW(g_btnFold, g_fold ? L"옵션 펼치기" : L"접기");
     SetWindowTextW(g_btnReset, L"초기화");
-    UpdateRulesButton();
-    {   // 아이콘만 있는 단추에 풍선 도움말
-        HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, g_hwnd, nullptr, g_hInst, nullptr);
-        auto addTip = [&](HWND b, const wchar_t* t) {
-            TOOLINFOW ti = {};
-            ti.cbSize = sizeof(ti);
-            ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-            ti.hwnd = g_hwnd;
-            ti.uId = (UINT_PTR)b;
-            ti.lpszText = (LPWSTR)t;
-            SendMessageW(tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-        };
-        if (tip) {
-            SendMessageW(tip, WM_SETFONT, (WPARAM)g_uiFont, FALSE);
-            addTip(g_btnTheme, L"화면 테마 (밝게·어둡게)");
-            addTip(g_btnAbout, L"정보 · 사용법 (F1)");
-            addTip(g_btnRecent, L"최근 파일");
-            addTip(g_btnReset, L"모든 옵션을 처음 상태로");
-            addTip(g_btnFold, L"옵션 칸 접기·펼치기");
+    {   // 아이콘 단추·선택목록에 풍선 도움말 (마우스를 올리면 이름 표시)
+        g_tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX, 0, 0, 0, 0, g_hwnd, nullptr, g_hInst, nullptr);
+        if (g_tip) {
+            SendMessageW(g_tip, WM_SETFONT, (WPARAM)g_uiFont, FALSE);
+            AddTip(g_btnTheme, L"화면 테마 (밝게·어둡게)");
+            AddTip(g_btnAbout, L"정보 · 사용법 (F1)");
+            AddTip(g_btnRecent, L"최근 파일");
+            AddTip(g_btnReset, L"모든 옵션을 처음 상태로");
+            AddTip(g_btnFold, L"옵션 칸 접기·펼치기");
+            AddTip(g_btnSave, L"저장 (Ctrl+S)");
+            AddTip(g_btnSaveAs, L"다른 이름으로 저장 (Ctrl+Shift+S)");
+            AddTip(g_btnToc, L"목차");
+            AddTip(g_btnFind, L"찾기·바꾸기 (Ctrl+F)");
+            AddTip(g_btnMark, L"책갈피 (지금 위치에 추가: Ctrl+B)");
+            AddTip(g_btnFull, FullTipText());
+            AddTip(g_cbVFont, L"글꼴");
+            AddTip(g_cbVSize, L"글자 크기 (Ctrl+휠, Ctrl + / -)");
+            AddTip(g_btnVBold, L"굵게");
+            AddTip(g_cbVColor, L"배색 (글자색·바탕색 조합)");
+            AddTip(g_btnVFg, L"글자색 직접 고르기");
+            AddTip(g_btnVBg, L"바탕색 직접 고르기");
+            AddTip(g_cbVLine, L"줄 간격");
+            AddTip(g_cbVMargin, L"여백");
+            AddTip(g_btnVReset, L"보기 설정 초기화");
         }
     }
 }
@@ -3173,7 +3128,7 @@ static void Layout() {
             HFONT f = t.h == g_btnSave ? g_btnBold : g_btnFont;
             int w = MeasureW(f, WinText(t.h)) + S(16) + S(7) + S(22);  // 아이콘 + 간격 + 좌우 여백
             if (t.h == g_btnSave) w += S(10);
-            if (t.h == g_btnTheme || t.h == g_btnAbout) w = S(32);  // 아이콘만
+            if (t.h == g_btnTheme || t.h == g_btnAbout || t.h == g_btnSave || t.h == g_btnSaveAs) w = S(32);  // 아이콘만
             if (t.h == g_btnRecent) w = S(22);
             if (t.h == g_btnOpen) w -= S(4);  // ▾와 붙여 한 덩어리로 보이게
             bx -= w;
@@ -3330,8 +3285,6 @@ static void Layout() {
         title(4, L"파일");
         label(4, 0, L"읽기", lwE); ctrl(4, g_cbReadEnc, 0, gx[4] + lwE, cw, true);
         label(4, 1, L"저장", lwE); ctrl(4, g_cbEnc, 1, gx[4] + lwE, cw, true);
-        put(g_btnRules, 0, 0, 0, 0, false);  // 바꾸기·지우기 목록은 쓰지 않음 (찾기·바꾸기 창으로)
-        g_rcRulesInfo = {0, 0, 0, 0};
         int right = gx[4] + lwE + cw, my = gyOf(4) + (titleH - S(22)) / 2;
         if (!g_reading && !g_fullscreen && !g_fold) {
             setText(g_btnFold, L"접기");
@@ -3350,57 +3303,52 @@ static void Layout() {
     }
     if (g_reading || g_fullscreen) for (HWND hb : {g_btnFold, g_btnReset}) put(hb, 0, 0, 0, 0, false);
 
-    // 읽기 모드: 보기 설정 줄 [글꼴·크기] | [색·글자색·바탕색] | [줄 간격·여백] ...... [보기 초기화]
+    // 읽기 모드: 보기 설정 줄 [가 글꼴·크기·굵게] | [배색·글자색·바탕색] | [줄 간격·여백] ...... [↺]
     g_readItems.clear();
     g_viewSeps.clear();
     {
-        HWND vc[] = {g_cbVFont, g_cbVSize, g_cbVColor, g_btnVFg, g_btnVBg, g_cbVLine, g_cbVMargin, g_btnVReset};
-        static int fontW = 0;  // 글꼴 목록 폭은 한 번만 잼 (닫힌 칸은 너무 넓지 않게, 펼친 목록은 전체 이름)
-        if (!fontW) fontW = std::min(combosW({g_cbVFont}), S(210));
-        {   // 보기 설정 줄이 한 줄에 들어가는 폭 (정리 모드에서도 미리 재 둠: 읽기로 바꿨을 때 두 줄이 되지 않게)
-            auto lw = [&](const wchar_t* t) { return MeasureW(g_uiFont, t) + S(8); };
-            int sepW = S(4) + 1 + S(16);
-            int resetW0 = MeasureW(g_smallFont, L"보기 초기화") + S(13) + S(4) + S(16);
-            g_viewNeedW = S(12) + lw(L"글꼴") + fontW + S(8) + lw(L"크기") + combosW({g_cbVSize}) + S(4) + sepW +
-                          lw(L"색") + combosW({g_cbVColor}) + S(14) + lw(L"글자색") + S(32) + S(14) + lw(L"바탕색") + S(32) + S(4) + sepW +
-                          lw(L"줄 간격") + combosW({g_cbVLine}) + S(14) + lw(L"여백") + combosW({g_cbVMargin}) + S(8) + resetW0 + S(10);
-        }
+        HWND vc[] = {g_cbVFont, g_cbVSize, g_btnVBold, g_cbVColor, g_btnVFg, g_btnVBg, g_cbVLine, g_cbVMargin, g_btnVReset};
+        static int fontW = 0;  // 닫힌 글꼴 칸은 좁게 (펼친 목록은 전체 이름). 한 번만 잼
+        if (!fontW) fontW = std::min(combosW({g_cbVFont}), S(150));
+        const int iconLab = S(16) + S(6);  // 이름표 아이콘 + 간격
+        const int sqW = S(30);             // 아이콘 단추 폭
+        const int sepW = S(4) + 1 + S(16);
+        int sizeW = combosW({g_cbVSize}), colorW = combosW({g_cbVColor}) + S(10), lineW = combosW({g_cbVLine}), marginW = combosW({g_cbVMargin});
+        // 보기 설정 줄이 한 줄에 들어가는 폭 (정리 모드에서도 미리 재 둠: 읽기로 바꿨을 때 두 줄이 되지 않게)
+        g_viewNeedW = S(12) + iconLab + fontW + S(6) + sizeW + S(6) + sqW + sepW + colorW + S(6) + sqW + S(4) + sqW + sepW +
+                      iconLab + lineW + S(14) + iconLab + marginW + S(16) + sqW + S(10);
         if (!g_reading || g_fullscreen) {
             for (HWND hv : vc) put(hv, 0, 0, 0, 0, false);
         } else {
-            int rx = S(12), rowR = S(40), ry0 = toolH, lines = 1, oneLine = 0;  // oneLine: 한 줄에 놓을 때 필요한 폭
-            int resetW = MeasureW(g_smallFont, L"보기 초기화") + S(13) + S(4) + S(16);
+            int rx = S(12), rowR = S(40), ry0 = toolH, lines = 1;
             auto wrapIf = [&](int need) {
-                if (rx > S(12) && rx + need > W - S(12) - resetW - S(8)) { rx = S(12); ry0 += rowR; lines++; return true; }
-                return false;
+                if (rx > S(12) && rx + need > W - S(12) - sqW - S(8)) { rx = S(12); ry0 += rowR; lines++; }
             };
-            auto item = [&](const wchar_t* lab, HWND hv, int w, bool combo, int gapAfter) {
-                int lw = lab[0] ? MeasureW(g_uiFont, lab) + S(8) : 0;
-                oneLine += lw + w + gapAfter;
+            auto item = [&](int icon, HWND hv, int w, bool combo, int gapAfter) {  // icon: 앞에 그릴 이름표 아이콘 (0이면 없음)
+                int lw = icon ? iconLab : 0;
                 wrapIf(lw + w);
-                if (lab[0]) g_readItems.push_back({{rx, ry0, rx + lw, ry0 + rowR}, lab, 1});
-                int cy = ry0 + (rowR - cbH) / 2;  // 색 견본도 선택목록과 같은 높이
+                int cy = ry0 + (rowR - cbH) / 2;  // 단추도 선택목록과 같은 높이
+                if (icon) g_readItems.push_back({{rx, cy, rx + S(16), cy + cbH}, L"", 3, icon});
                 put(hv, rx + lw, cy, w, combo ? S(300) : cbH, true);
                 rx += lw + w + gapAfter;
             };
             auto sep = [&]() {
-                oneLine += S(4) + 1 + S(16);
                 if (rx == S(12)) return;
                 rx += S(4);
                 g_viewSeps.push_back(RECT{rx, ry0 + S(10), rx + 1, ry0 + rowR - S(10)});
                 rx += 1 + S(16);
             };
-            item(L"글꼴", g_cbVFont, fontW, true, S(8));
-            item(L"크기", g_cbVSize, combosW({g_cbVSize}), true, S(4));
+            item(ID_VFONT, g_cbVFont, fontW, true, S(6));
+            item(0, g_cbVSize, sizeW, true, S(6));
+            item(0, g_btnVBold, sqW, false, 0);
             sep();
-            item(L"색", g_cbVColor, combosW({g_cbVColor}), true, S(14));
-            item(L"글자색", g_btnVFg, S(32), false, S(14));
-            item(L"바탕색", g_btnVBg, S(32), false, S(4));
+            item(0, g_cbVColor, colorW, true, S(6));
+            item(0, g_btnVFg, sqW, false, S(4));
+            item(0, g_btnVBg, sqW, false, 0);
             sep();
-            item(L"줄 간격", g_cbVLine, combosW({g_cbVLine}), true, S(14));
-            item(L"여백", g_cbVMargin, combosW({g_cbVMargin}), true, 0);
-            put(g_btnVReset, W - S(10) - resetW, ry0 + (rowR - S(26)) / 2, resetW, S(26), true);  // 오른쪽 끝
-            (void)oneLine;
+            item(ID_VLINE, g_cbVLine, lineW, true, S(14));
+            item(ID_VMARGIN, g_cbVMargin, marginW, true, 0);
+            put(g_btnVReset, W - S(10) - sqW, ry0 + (rowR - cbH) / 2, sqW, cbH, true);  // 오른쪽 끝
             panelH = lines * rowR;
         }
     }
@@ -3419,33 +3367,16 @@ static void Layout() {
         g_rcSrcHead = {0, 0, 0, 0};
         g_rcDstHead = {m, top, W - m, top + headH};
         int rx = g_rcDstHead.left + S(12) + MeasureW(g_cardFont, L"읽기") + S(10);
-        for (HWND hb : {g_btnToc, g_btnFind, g_btnMark, g_btnFull}) {  // 목차 · 찾기 · 책갈피 · 전체 화면
-            int bw = headBtnW(hb);
-            put(hb, rx, by, bw, bh);
-            rx += bw + S(2);
+        for (HWND hb : {g_btnToc, g_btnFind, g_btnMark, g_btnFull}) {  // 목차 · 찾기 · 책갈피 · 전체 화면 (아이콘만)
+            put(hb, rx, by, S(30), bh);
+            rx += S(30) + S(2);
         }
         g_dstMetaLeft = rx + S(8);
-        if (g_findOpen) {  // 찾기 줄: 칸 머리 오른쪽
-            int cw = MeasureW(g_uiFont, L"닫기") + S(18), nw = MeasureW(g_uiFont, L"다음") + S(18), pw = MeasureW(g_uiFont, L"이전") + S(18);
-            int fx = g_rcDstHead.right - S(8) - cw;
-            put(g_btnFClose, fx, by, cw, bh); fx -= S(4) + nw;
-            put(g_btnFNext, fx, by, nw, bh); fx -= S(4) + pw;
-            put(g_btnFPrev, fx, by, pw, bh); fx -= S(8);
-            int ew = S(170);
-            g_rcFindBox = {fx - ew, by, fx, by + bh};
-            int ih = MeasureH(g_uiFont);
-            put(g_edFind, g_rcFindBox.left + S(6), by + (bh - ih) / 2, ew - S(12), ih);
-            int iw = MeasureW(g_smallFont, L"찾지 못함") + S(12);
-            g_rcFindInfo = {g_rcFindBox.left - iw - S(4), g_rcDstHead.top, g_rcFindBox.left - S(4), g_rcDstHead.bottom};
-        } else {
-            for (HWND hf : {g_edFind, g_btnFPrev, g_btnFNext, g_btnFClose}) put(hf, 0, 0, 0, 0, false);
-            g_rcFindBox = g_rcFindInfo = {0, 0, 0, 0};
-        }
         for (HWND hh : {g_btnPaste, g_btnClear, g_chkSync, g_btnCopyAll, g_btnReplace}) put(hh, 0, 0, 0, 0, false);
         put(g_src, 0, 0, 0, 0, false);
         put(g_dst, m + 1, top + headH, W - m * 2 - 2, bottom - top - headH - 1 - edBottomInset);
     } else {
-        for (HWND hb : {g_btnToc, g_btnFind, g_btnMark, g_btnFull, g_edFind, g_btnFPrev, g_btnFNext, g_btnFClose}) put(hb, 0, 0, 0, 0, false);
+        for (HWND hb : {g_btnToc, g_btnFind, g_btnMark, g_btnFull}) put(hb, 0, 0, 0, 0, false);
         int cx = g_rcSrcHead.left + S(12) + MeasureW(g_cardFont, L"원본") + S(10);
         int w1 = headBtnW(g_btnPaste), w2 = headBtnW(g_btnClear);
         put(g_btnPaste, cx, by, w1, bh); cx += w1 + S(2);
@@ -3480,6 +3411,7 @@ static void Layout() {
 }
 
 static void RoundPathSel(GraphicsPath& p, REAL x, REAL y, REAL w, REAL h, REAL r, bool tl, bool tr, bool br, bool bl);
+static void DrawToolIcon(Graphics& g, int id, REAL ox, REAL oy, REAL u, COLORREF c, COLORREF bg);
 static void Paint(HDC hdc) {
     RECT rc;
     GetClientRect(g_hwnd, &rc);
@@ -3582,7 +3514,17 @@ static void Paint(HDC hdc) {
                   !en ? col::panelLine : GetFocus() == g_edLong ? col::accent : col::border);
     }
     if (g_reading) {
-        for (auto& it : g_readItems) DrawTxt(dc, it.text, it.rc, g_uiFont, col::label);
+        for (auto& it : g_readItems) {
+            if (it.kind != 3) { DrawTxt(dc, it.text, it.rc, g_uiFont, col::label); continue; }
+            if (it.icon == ID_VFONT) {  // 글꼴: "가"
+                DrawTxt(dc, L"가", it.rc, g_btnBold, col::label, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                continue;
+            }
+            Graphics g(dc);
+            g.SetSmoothingMode(SmoothingModeAntiAlias);
+            REAL u = (REAL)S(16) / 16.0f;
+            DrawToolIcon(g, it.icon, (REAL)it.rc.left, (REAL)(it.rc.top + it.rc.bottom - S(16)) / 2, u, col::label, col::head);
+        }
     } else if (!g_fold && !g_fullscreen) {
         for (auto& it : g_items) {
             if (it.kind == 0) DrawTxt(dc, it.text, it.rc, g_sectFont, col::groupTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -3598,13 +3540,7 @@ static void Paint(HDC hdc) {
         DrawTxt(dc, meta, mr, g_smallFont, col::faint, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     };
     if (g_reading) {
-        if (g_findOpen) {  // 찾기 줄: 결과 수 + 둥근 입력 칸
-            head(g_rcDstHead, L"읽기", L"", g_dstMetaLeft);
-            DrawTxt(dc, g_findInfo, g_rcFindInfo, g_smallFont, col::sub, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-            Graphics g(dc);
-            g.SetSmoothingMode(SmoothingModeAntiAlias);
-            FillRound(g, g_rcFindBox, S(5), col::field, GetFocus() == g_edFind ? col::accent : col::border);
-        } else {
+        {
             wstring meta = L"클릭·Space: 쪽 넘김   ·   Esc: " + wstring(g_fullscreen ? L"전체 화면 끝" : L"정리 모드");
             if (!g_sizeText.empty()) meta += L"   ·   " + g_sizeText;  // 파일 크기 (읽은 %는 맨 오른쪽)
             if (g_readPct >= 0) meta += L"   ·   " + std::to_wstring(g_readPct) + L"%";
@@ -3726,13 +3662,45 @@ static void DrawToolIcon(Graphics& g, int id, REAL ox, REAL oy, REAL u, COLORREF
         } else { g.DrawLines(&pen, a1, 3); g.DrawLines(&pen, a2, 3); g.DrawLines(&pen, a3, 3); g.DrawLines(&pen, a4, 3); }
         break;
     }
-    case ID_SAVE: case ID_SAVEAS: {  // 디스켓
+    case ID_SAVE: {  // 디스켓
         GraphicsPath path;
         RoundPath(path, ox + 2 * u, oy + 2 * u, 12 * u, 12 * u, 1.6f * u);
         g.DrawPath(&pen, &path);
         g.DrawRectangle(&pen, ox + 5 * u, oy + 2 * u, 5.5f * u, 3.8f * u);
         g.DrawRectangle(&pen, ox + 4.5f * u, oy + 9 * u, 7 * u, 5 * u);
-        if (id == ID_SAVEAS) { g.FillRectangle(&bgb, ox + 9 * u, oy + 8.5f * u, 7 * u, 7.5f * u); g.DrawLine(&pen, P(10, 15), P(15, 10)); }
+        break;
+    }
+    case ID_SAVEAS: {  // 겹친 디스켓 두 장 (뒤 장은 오른쪽 위)
+        GraphicsPath back;
+        RoundPath(back, ox + 5.5f * u, oy + 0.8f * u, 9.7f * u, 9.7f * u, 1.4f * u);
+        g.DrawPath(&pen, &back);
+        GraphicsPath front;
+        RoundPath(front, ox + 0.8f * u, oy + 5.5f * u, 9.7f * u, 9.7f * u, 1.4f * u);
+        g.FillPath(&bgb, &front);
+        g.DrawPath(&pen, &front);
+        g.DrawRectangle(&pen, ox + 3.3f * u, oy + 5.5f * u, 4.4f * u, 2.8f * u);
+        g.DrawRectangle(&pen, ox + 3 * u, oy + 11 * u, 5.2f * u, 4.2f * u);
+        break;
+    }
+    case ID_VLINE: {  // 줄 간격: 위아래 화살표 + 줄
+        g.DrawLine(&pen, P(3.5f, 2.5f), P(3.5f, 13.5f));
+        PointF up[] = {P(1.5f, 4.5f), P(3.5f, 2.5f), P(5.5f, 4.5f)}, dn[] = {P(1.5f, 11.5f), P(3.5f, 13.5f), P(5.5f, 11.5f)};
+        g.DrawLines(&pen, up, 3); g.DrawLines(&pen, dn, 3);
+        for (REAL y : {3.5f, 8.0f, 12.5f}) g.DrawLine(&pen, P(8.5f, y), P(15, y));
+        break;
+    }
+    case ID_VMARGIN: {  // 여백: 쪽 테두리 + 안쪽 여백 선
+        GraphicsPath p; RoundPath(p, ox + 1.5f * u, oy + 2 * u, 13 * u, 12 * u, 1.4f * u); g.DrawPath(&pen, &p);
+        Pen thin(GC(c), 1.2f * u);
+        thin.SetStartCap(LineCapRound); thin.SetEndCap(LineCapRound);
+        for (REAL y : {5.5f, 8.0f, 10.5f}) g.DrawLine(&thin, P(5, y), P(11, y));
+        break;
+    }
+    case ID_VBG: {  // 바탕색: 페인트 통
+        PointF bucket[] = {P(2, 7.5f), P(7, 2.5f), P(12, 7.5f), P(7, 12.5f)};
+        g.DrawPolygon(&pen, bucket, 4);
+        g.DrawLine(&pen, P(4.5f, 5), P(9.5f, 10));
+        g.FillEllipse(&fg, ox + 12.2f * u, oy + 9.5f * u, 2.8f * u, 3.6f * u);
         break;
     }
     }
@@ -3759,12 +3727,12 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
     HGDIOBJ ob = SelectObject(dc, bmp);
     RECT r = {0, 0, w, hh};
     int id = (int)d->CtlID;
-    bool inPanel = id == ID_RULES || (id >= ID_RP_FIND && id < ID_REPLACE);  // 찾기·바꾸기 창, 목록 창 (옅은 바탕)
-    bool headBtn = id == ID_RTOC || id == ID_RFIND || id == ID_RMARK || id == ID_RFULL || id == ID_FPREV || id == ID_FNEXT || id == ID_FCLOSE;
+    bool inPanel = (id >= ID_RP_FIND && id < ID_REPLACE);  // 찾기·바꾸기 창, 목록 창 (옅은 바탕)
+    bool headBtn = id == ID_RTOC || id == ID_RFIND || id == ID_RMARK || id == ID_RFULL;
     bool headGhost = id == ID_PASTE || id == ID_CLEAR || id == ID_COPYALL || id == ID_REPLACE || id == ID_RTOC || id == ID_RFIND || id == ID_RMARK || id == ID_RFULL;
     bool mini = id == ID_FOLD || id == ID_RESET || id == ID_VRESET;  // 옵션·보기 줄의 작은 글자 단추
     bool onHead = id == ID_OPEN || id == ID_RECENT || id == ID_BATCH || id == ID_SAVEAS || id == ID_SAVE || id == ID_THEME || id == ID_ABOUT || mini ||
-                  id == ID_COLLAPSE || id == ID_JUNK || id == ID_HANJA || id == ID_HALF || id == ID_VFG || id == ID_VBG || id == ID_MODE_TIDY || id == ID_READ;
+                  id == ID_COLLAPSE || id == ID_JUNK || id == ID_HANJA || id == ID_HALF || id == ID_VFG || id == ID_VBG || id == ID_VBOLD || id == ID_MODE_TIDY || id == ID_READ;
     COLORREF bg = (id == ID_SYNC || headGhost || headBtn) ? col::paneHead : inPanel ? col::panel : onHead ? col::head : col::win;  // 주 창 메뉴 영역은 head 바탕
     FillRect2(dc, r, bg);
     bool hover = (GetWindowLongPtrW(h, GWLP_USERDATA) & 1) != 0;
@@ -3823,18 +3791,38 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
         RECT tr = {x0 + iw + gap, 0, w, hh};
         DrawTxt(gdc, text, tr, f, tc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         g.ReleaseHDC(gdc);
-    } else if (id == ID_VFG || id == ID_VBG) {  // 색 견본
+    } else if (id == ID_VFG || id == ID_VBG) {  // 글자색("가") / 바탕색(페인트 통) 아이콘 + 아래에 지금 색 막대
         COLORREF fg, bgc;
         ViewColors(fg, bgc);
-        Graphics g(dc);
-        g.SetSmoothingMode(SmoothingModeAntiAlias);
-        FillRound(g, r, S(5), col::field, hover ? col::hoverBorder : col::border);
-        RECT in = {r.left + S(4), r.top + S(4), r.right - S(4), r.bottom - S(4)};
-        FillRound(g, in, S(3), id == ID_VFG ? fg : bgc, col::swatchEdge);
+        COLORREF fill = down ? col::tbDown : hover ? col::tbHover : col::field;
+        {
+            Graphics g(dc);
+            g.SetSmoothingMode(SmoothingModeAntiAlias);
+            FillRound(g, r, S(5), fill, hover ? col::hoverBorder : col::border);
+            RECT bar = {S(7), hh - S(8), w - S(7), hh - S(4)};
+            FillRound(g, bar, S(1), id == ID_VFG ? fg : bgc, col::swatchEdge);
+            if (id == ID_VBG) {
+                int iw = S(13);
+                DrawToolIcon(g, ID_VBG, (REAL)(w - iw) / 2, (REAL)(hh - S(8) - iw) / 2 + S(1), (REAL)iw / 16.0f, col::tbIcon, fill);
+            }
+        }
+        if (id == ID_VFG) {
+            RECT tr = {0, 0, w, hh - S(7)};
+            DrawTxt(dc, L"가", tr, g_btnBold, col::text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    } else if (id == ID_VBOLD) {  // 굵게: 켜지면 모드 전환 단추처럼 강조
+        {
+            Graphics g(dc);
+            g.SetSmoothingMode(SmoothingModeAntiAlias);
+            if (g_vBold) FillRound(g, r, S(5), col::segActive, col::accent);
+            else FillRound(g, r, S(5), down ? col::tbDown : hover ? col::tbHover : col::field, hover ? col::hoverBorder : col::border);
+        }
+        DrawTxt(dc, L"B", r, g_titleFont, g_vBold ? col::accent : col::text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     } else if (id == ID_OPEN || id == ID_BATCH || id == ID_ABOUT || id == ID_SAVEAS || id == ID_SAVE || id == ID_THEME || id == ID_RECENT || mini || headGhost) {
         // 도구줄·칸 머리·작은 글자 단추: 평소엔 테두리 없이 아이콘 + 글, 마우스를 올리면 옅은 바탕 ([저장]만 색 채움)
         bool primary = id == ID_SAVE;
-        bool iconOnly = id == ID_THEME || id == ID_ABOUT || id == ID_RECENT;
+        bool iconOnly = id == ID_THEME || id == ID_ABOUT || id == ID_RECENT || id == ID_SAVE || id == ID_SAVEAS || id == ID_VRESET ||
+                        id == ID_RTOC || id == ID_RFIND || id == ID_RMARK || id == ID_RFULL;
         bool L = id != ID_RECENT, R = id != ID_OPEN;  // [열기][▾]는 붙은 한 덩어리
         COLORREF fill, tc, ic;
         if (primary && g_savedFlash) {
@@ -3860,7 +3848,7 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
             HFONT f = primary ? g_btnBold : mini ? g_smallFont : headGhost ? g_uiFont : g_btnFont;
             if (primary && g_savedFlash) text = L"저장됨";
             if (iconOnly) text.clear();
-            int iw = mini ? S(13) : headGhost ? S(14) : S(16);
+            int iw = iconOnly ? S(16) : mini ? S(13) : headGhost ? S(14) : S(16);
             int tw = text.empty() ? 0 : MeasureW(f, text), gap = text.empty() ? 0 : (mini || headGhost) ? S(5) : S(7);
             int total = iw + gap + tw, x0 = (w - total) / 2;
             REAL u = (REAL)iw / 16.0f;  // 16 칸 기준 아이콘을 iw 크기로
@@ -3894,7 +3882,7 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
             }
         }
         COLORREF tc = primary ? (disabled ? col::accentDisText : RGB(255, 255, 255)) : disabled ? col::faint : col::text;
-        HFONT f = (id == ID_RULES || id == ID_READ || headBtn) ? g_uiFont : (primary ? g_btnBold : g_btnFont);
+        HFONT f = (id == ID_READ || headBtn) ? g_uiFont : (primary ? g_btnBold : g_btnFont);
         DrawTxt(dc, text, r, f, tc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
     BitBlt(d->hDC, rc.left, rc.top, w, hh, dc, 0, 0, SRCCOPY);
@@ -3910,6 +3898,12 @@ static void DrawComboItem(const DRAWITEMSTRUCT* d) {
     int n = (int)SendMessageW(d->hwndItem, CB_GETLBTEXT, d->itemID, (LPARAM)buf);
     bool editPart = (d->itemState & ODS_COMBOBOXEDIT) != 0;
     bool sel = (d->itemState & ODS_SELECTED) != 0 && !editPart;
+    if (d->hwndItem == g_cbVColor) {  // 배색: 색 견본 (고른 항목은 강조 테두리)
+        FillRect2(d->hDC, d->rcItem, sel ? col::selBg : col::field);
+        RECT cr = {d->rcItem.left + S(4), d->rcItem.top + S(2), d->rcItem.right - S(4), d->rcItem.bottom - S(2)};
+        DrawColorChip(d->hDC, cr, (int)d->itemID, sel ? col::accent : col::swatchEdge);
+        return;
+    }
     FillRect2(d->hDC, d->rcItem, sel ? col::selBg : col::field);
     RECT r = d->rcItem;
     r.left += S(8);
@@ -4016,7 +4010,7 @@ static std::vector<wstring> PickFiles(HWND owner, const wchar_t* title) {
     OPENFILENAMEW of = {};
     of.lStructSize = sizeof(of);
     of.hwndOwner = owner;
-    of.lpstrFilter = kFilter;
+    of.lpstrFilter = kOpenFilter;
     of.lpstrFile = buf.data();
     of.nMaxFile = (DWORD)buf.size();
     of.lpstrTitle = title;
@@ -4058,7 +4052,12 @@ static DWORD WINAPI BwThread(LPVOID p) {
             U32 t;
             if (!why.empty()) st = L"지원 안 함: " + why;
             else if (!ReadAll(f, bytes)) st = L"실패: 읽을 수 없음";
-            else {
+            else if (IsEpubPath(f)) {  // EPUB: 본문 글을 꺼내 정리
+                wstring w;
+                if (!EpubExtract(bytes, t, w, DecodeEpubDoc)) st = L"지원 안 함: " + w;
+                else enc = E_UTF8BOM;
+                std::string().swap(bytes);
+            } else {
                 t = Decode(bytes, enc);
                 std::string().swap(bytes);
                 if (LooksBinary(t)) st = L"지원 안 함: 텍스트 파일이 아님";
@@ -4596,7 +4595,6 @@ static bool SaveRuleItems(const std::vector<RuleItem>& v, const std::vector<wstr
         return false;
     }
     ParseRules(w);
-    UpdateRulesButton();
     return true;
 }
 static void RlPresetMenu(HWND h, HWND anchor) {
@@ -5474,7 +5472,7 @@ static LRESULT CALLBACK AboutProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             DrawTxt(dc, t, d, f, c, DT_WORDBREAK | DT_NOPREFIX);
             y = m.bottom + gapAfter;
         };
-        para(L"흐트러진 텍스트 파일의 문단을 읽기 좋게 정리하는 프로그램입니다. "
+        para(L"흐트러진 텍스트 파일(EPUB 전자책 포함)의 문단을 읽기 좋게 정리하는 프로그램입니다. "
              L"옛 모바일용 고정폭 글, 한 줄로 이어진 글, 쓸데없이 많은 줄바꿈, "
              L"공백·문장부호·특수문자 문제를 자동으로 찾아 정리하고, 정리한 글은 읽기 모드에서 편하게 읽을 수 있습니다.", g_uiFont, col::text, S(16));
         // 제작 정보 (라벨 / 값)
@@ -5564,6 +5562,7 @@ static void PasteAsSource() {
     if (w.empty()) return;
     g_text = NormalizeNL(WToU32(w.data(), w.size()));
     g_enc = E_UTF8BOM;
+    g_epub = false;
     g_path.clear();
     g_mergeFiles.clear();
     g_mergeBounds.clear();
@@ -5585,10 +5584,12 @@ static void ClearAll() {
     g_text.clear(); g_out.clear(); g_outToSrc.clear(); g_srcToOut.clear();
     g_path.clear(); g_mergeFiles.clear(); g_mergeBounds.clear(); g_lastSaved.clear();
     g_preview = false;
+    g_epub = false;
     SendMessageW(g_src, EM_SETREADONLY, FALSE, 0);
     SendMessageW(g_dst, EM_SETREADONLY, g_reading ? TRUE : FALSE, 0);
     SetRichText(g_src, L"");
     SetRichText(g_dst, L"");
+    g_srcStale = false;
     g_dstDirty = false; g_srcPending = false;
     g_metaSrc.clear(); g_metaDst.clear(); g_sizeText.clear(); g_chips.clear();
     UpdateTitle();
@@ -5770,6 +5771,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND: {
         int id = LOWORD(wp), code = HIWORD(wp);
         if (lp && (code == CBN_DROPDOWN || code == CBN_CLOSEUP)) InvalidateRect((HWND)lp, nullptr, FALSE);
+        if (code == CBN_DROPDOWN) HideTip();  // 펼친 목록 위에 풍선 도움말이 겹치지 않게
         switch (id) {
         case ID_OPEN: DoOpen(); AfterTextChange(); return 0;
         case ID_RECENT: ShowRecentMenu(g_btnOpen); AfterTextChange(); return 0;
@@ -5777,7 +5779,6 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_SAVE: DoSave(); return 0;
         case ID_SAVEAS: if (!g_text.empty()) DoSaveAs(); return 0;
         case ID_BATCH: DoBatchDialog(); AfterTextChange(); return 0;
-        case ID_RULES: OpenRules(); return 0;
         case ID_PASTE: if (!g_busy && ConfirmDiscardEdits()) PasteAsSource(); return 0;
         case ID_CLEAR: ClearAll(); return 0;
         case ID_COPYALL: CopyResult(); return 0;
@@ -5788,31 +5789,36 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_RMARK: if (g_reading) ShowMarkMenu(g_btnMark); return 0;
         case ID_MARK_ADD: AddMark(); return 0;
         case ID_RFULL: SetFullscreen(!g_fullscreen); return 0;
-        case ID_FPREV: FindStep(-1); return 0;
-        case ID_FNEXT: FindStep(1); return 0;
-        case ID_FCLOSE: SetFindOpen(false); return 0;
         case ID_SIZE_UP: if (g_reading) StepFontSize(1); return 0;
         case ID_SIZE_DOWN: if (g_reading) StepFontSize(-1); return 0;
         case ID_MODE_TIDY: SetReading(false); return 0;
         case ID_VRESET:  // 보기 설정을 처음 상태로
-            if (MessageBoxW(h, L"읽기 모드의 글꼴·크기·색·줄 간격·여백을 처음 상태로 되돌릴까요?", L"보기 초기화",
+            if (MessageBoxW(h, L"읽기 모드의 글꼴·크기·굵게·색·줄 간격·여백을 처음 상태로 되돌릴까요?", L"보기 초기화",
                             MB_OKCANCEL | MB_ICONQUESTION) != IDOK) { SetFocus(g_dst); return 0; }
             {
                 const wchar_t* defFont = L"맑은 고딕";
                 auto it = std::find(g_fontNames.begin(), g_fontNames.end(), wstring(defFont));
                 if (it == g_fontNames.end()) { g_fontNames.push_back(defFont); SendMessageW(g_cbVFont, CB_ADDSTRING, 0, (LPARAM)defFont); it = g_fontNames.end() - 1; }
-                g_vFont = defFont; g_vSize = 11; g_vColor = 0; g_vLine = 0; g_vMargin = 1;
+                g_vFont = defFont; g_vSize = 11; g_vColor = 0; g_vLine = 1; g_vMargin = 1; g_vBold = false;
+                InvalidateRect(g_btnVBold, nullptr, FALSE);
                 SendMessageW(g_cbVFont, CB_SETCURSEL, (WPARAM)(it - g_fontNames.begin()), 0);
                 int si = 0;
                 for (int i = 0; i < (int)(sizeof(kSizes) / sizeof(*kSizes)); ++i) if (kSizes[i] == 11) si = i;
                 SendMessageW(g_cbVSize, CB_SETCURSEL, si, 0);
                 SendMessageW(g_cbVColor, CB_SETCURSEL, 0, 0);
-                SendMessageW(g_cbVLine, CB_SETCURSEL, 0, 0);
+                SendMessageW(g_cbVLine, CB_SETCURSEL, 1, 0);
                 SendMessageW(g_cbVMargin, CB_SETCURSEL, 1, 0);
                 SaveView();
                 ApplyView(true, true);
                 SetStatus(L"보기 설정을 처음 상태로 되돌렸습니다.");
             }
+            SetFocus(g_dst);
+            return 0;
+        case ID_VBOLD:
+            g_vBold = !g_vBold;
+            InvalidateRect(g_btnVBold, nullptr, FALSE);
+            SaveView();
+            ApplyView(true, true);
             SetFocus(g_dst);
             return 0;
         case ID_VFG: PickViewColor(true); SetFocus(g_dst); return 0;
@@ -5941,7 +5947,12 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
         }
         g_vfg = (COLORREF)GetPrivateProfileIntW(L"opt", L"vfg", RGB(30, 30, 30), g_ini.c_str());
         g_vbg = (COLORREF)GetPrivateProfileIntW(L"opt", L"vbg", RGB(255, 255, 255), g_ini.c_str());
-        g_vLine = IniGet(L"vline", 0); if (g_vLine < 0 || g_vLine > 3) g_vLine = 0;
+        {   // 줄 간격 (예전 번호 0~3은 "좁게"가 앞에 들어간 새 목록 번호 1~4로 바꿔 읽음)
+            int v2 = IniGet(L"vline2", -1);
+            if (v2 < 0) { int o = IniGet(L"vline", 0); v2 = (o >= 0 && o <= 3) ? o + 1 : 1; }
+            g_vLine = (v2 >= 0 && v2 <= 4) ? v2 : 1;
+        }
+        g_vBold = IniGet(L"vbold", 0) != 0;
         g_vMargin = IniGet(L"vmargin", 1); if (g_vMargin < 0 || g_vMargin > 2) g_vMargin = 1;
         g_reading = IniGet(L"reading", 0) != 0;
         for (auto& c : g_custCols) c = RGB(255, 255, 255);
