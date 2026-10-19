@@ -1126,7 +1126,10 @@ static void RecreateRich(HWND& h) {
     SendMessageW(n, EM_SETRECT, 0, (LPARAM)&fr);
     HWND old = h;
     h = n;
-    DestroyWindow(old);
+    // 큰 글이 든 칸은 지우는 데 오래 걸릴 수 있어, 먼저 숨기고 새 칸이 화면에 그려진 뒤에 지움
+    ShowWindow(old, SW_HIDE);
+    SetWindowLongPtrW(old, GWLP_ID, 0);  // 알림이 와도 무시되게
+    if (!PostMessageW(g_hwnd, WM_APP + 21, 0, (LPARAM)old)) DestroyWindow(old);
     if (focus) SetFocus(n);
 }
 static HFONT EditFontOf(HWND h) { return (h == g_dst && g_reading) ? g_readFont : g_edFont; }  // 글 칸에 쓰는 글꼴 (글 칸에 묻지 않음)
@@ -1811,7 +1814,30 @@ static void ShowResultText(long need = 0) {
         SetRichText(g_dst, U32ToW(g_out.substr(0, oc), true) + PreviewNote(g_out.size()));
     }
 }
+// 읽기 모드에서 큰 글을 열 때: 글 전체 정리가 끝나기 전에, 읽을 곳 둘레만 먼저 정리해 바로 보여 줌
+// (정리 모드가 원본 칸을 먼저 보여 주는 것처럼). 전체 정리가 끝나면 그 결과로 바꿈
+static bool g_quickPreview = false;
+static void ShowQuickPreview() {
+    if (!g_reading || !g_busy || g_text.empty()) return;
+    size_t n = g_text.size(), a = 0;
+    if (g_wantIdx > 0 && g_wantLen > 0) {  // 지난번 읽던 곳: 원본에서 대략 같은 비율의 자리부터
+        double f = std::min(1.0, (double)g_wantIdx / (double)g_wantLen);
+        a = (size_t)(f * (double)n);
+        while (a > 0 && g_text[a - 1] != '\n') --a;
+    }
+    size_t b = std::min(n, a + 150000);
+    if (b < n) { size_t lim = std::min(n, b + 20000); while (b < lim && g_text[b] != '\n') ++b; }
+    TidyOptions o = ReadOptions();
+    U32 part = TidyProcess(g_text.substr(a, b - a), o, nullptr);
+    SetRichText(g_dst, U32ToW(part, true));
+    g_quickPreview = true;
+    g_readPct = -1;
+    RedrawWindow(g_dst, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+}
 static void FinishReprocess(ProcJob& j) {
+    bool wasQuick = g_quickPreview && !(g_newDoc && g_wantIdx > 0);  // 처음부터 미리 본 경우: 넘긴 쪽을 이어서
+    long quickTop = wasQuick ? TopChar(g_dst) : 0;
+    g_quickPreview = false;
     long keepTop = g_newDoc ? -1 : GlobalTop(), keepOutLen = (long)g_out.size();
     g_out.swap(j.out);
     g_outToSrc.swap(j.map);
@@ -1821,7 +1847,7 @@ static void FinishReprocess(ProcJob& j) {
     long newLen = (long)g_out.size();
     auto scaled = [&](long idx, long oldLen) { return (oldLen > 0 && oldLen != newLen) ? (long)((double)idx * newLen / oldLen) : idx; };
     bool restoring = g_newDoc && g_wantIdx > 0;
-    long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : 0;
+    long target = restoring ? scaled(g_wantIdx, g_wantLen) : keepTop > 0 ? scaled(keepTop, keepOutLen) : wasQuick ? quickTop : 0;
     ShowResultText(target);
     g_dstDirty = false;
 
@@ -1994,6 +2020,7 @@ static bool LoadFile(const wstring& path) {
     AddRecent(path);
     UpdateTitle();
     Reprocess();
+    ShowQuickPreview();  // 읽기 모드의 큰 글: 정리가 끝나기 전에 읽을 곳부터 먼저
     if (!g_busy) { SetStatus(L"열었습니다: " + path + g_restoreNote); g_restoreNote.clear(); }
     return true;
 }
@@ -2661,6 +2688,7 @@ static wstring PosKey(const wstring& path) {
     return buf;
 }
 static void SaveReadPos() {
+    if (g_quickPreview) return;  // 아직 미리 보기 (위치가 정리 결과와 다름)
     if (g_posPath.empty() || g_ini.empty() || g_out.empty() || RichLen(g_dst) <= 0) return;
     long top = GlobalTop();
     if (g_pendingTop > top) top = g_pendingTop;  // 큰 글을 앞부분만 보는 중이면 기억해 둔 자리 유지
@@ -2747,6 +2775,7 @@ static void PageFlip(int dir) {
     }
 }
 static int ReadPercent() {
+    if (g_quickPreview) return -1;  // 정리 중: 표시 안 함
     if (g_fillPending && g_fillTotalCp > 0) {  // 이어 넣는 중: 화면 맨 아래 글자를 글 전체 글자 수로 나눔
         RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
         POINTL pt = {fr.left + 1, fr.bottom - 2};
@@ -2905,6 +2934,7 @@ static void SetReading(bool on) {
     if (on && g_pendingTop > top) top = g_pendingTop;
     SetCursor(LoadCursor(nullptr, IDC_WAIT));
     g_reading = on;
+    g_quickPreview = false;  // 칸을 다시 채우므로 미리 보기는 끝
     if (!on && g_srcStale) FillSource();  // 읽기 모드에서 연 글: 이제 원본 칸을 채움
     SendMessageW(g_dst, EM_SETREADONLY, (on || g_preview) ? TRUE : FALSE, 0);
     ReloadDst(top);  // 글꼴·모양을 바꾸고 (큰 글은 알맞은 부분을) 다시 넣음
@@ -3162,6 +3192,7 @@ static bool IsChapterLine(const U32& t, size_t a, size_t b) {
 }
 static void ShowTocMenu(HWND anchor) {
     HideTip();
+    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     const U32& hay = FindHay();
     std::vector<size_t> pos;
     size_t a = 0;
@@ -3220,6 +3251,7 @@ static void SaveMarks(const std::vector<long>& v) {
     WritePrivateProfileStringW(L"mark", PosKey(g_posPath).c_str(), s.c_str(), g_ini.c_str());
 }
 static void AddMark() {
+    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     if (!g_reading) return;
     if (g_posPath.empty()) { SetStatus(L"책갈피는 파일로 연 글에서 쓸 수 있습니다."); return; }
     std::vector<long> v = LoadMarks();
@@ -3233,6 +3265,7 @@ static void AddMark() {
 }
 static void ShowMarkMenu(HWND anchor) {
     HideTip();
+    if (g_quickPreview) { SetStatus(L"정리하는 중입니다. 끝나면 쓸 수 있습니다."); return; }
     std::vector<long> v = LoadMarks();
     HMENU m = CreatePopupMenu();
     bool file = !g_posPath.empty();
@@ -5963,6 +5996,7 @@ static void ClearAll() {
     SetRichText(g_src, L"");
     SetRichText(g_dst, L"");
     g_srcStale = false;
+    g_quickPreview = false;
     g_dstDirty = false; g_srcPending = false;
     g_metaSrc.clear(); g_metaDst.clear(); g_sizeText.clear(); g_chips.clear();
     UpdateTitle();
@@ -6123,6 +6157,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CONTEXTMENU:
         if ((HWND)wp == g_src || (HWND)wp == g_dst) { ShowEditMenu((HWND)wp, lp); return 0; }
         break;
+    case WM_APP + 21:  // 바꾼 글 칸의 예전 칸 지우기 (RecreateRich)
+        if (IsWindow((HWND)lp) && (HWND)lp != g_src && (HWND)lp != g_dst) DestroyWindow((HWND)lp);
+        return 0;
     case WM_APP_PROCDONE:
         OnProcDone((ProcJob*)lp);
         return 0;
