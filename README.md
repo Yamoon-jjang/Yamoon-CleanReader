@@ -91,7 +91,7 @@
 - 회차 · 장 제목 인식 — `제1화`, `[2화]`, `【3장】`, `<외전>`, `《프롤로그》` — 수량 표현(`2장 분량의`)과는 구별
 - 꾸밈 제목(`──────` / 제목 / `──────`), 장면 구분선, 가운데 정렬 머리말 보존
 - 글 끝 덧붙임(`PS:`, `작가의 말`, `후기:`) 앞에서 문단 나누기
-- 외국어 문단도 그 언어에 맞게 문장 나누기 — 중국어 · 일본어(띄어쓰기 없는 `。！？`), 영어(약어 · 이니셜 구별), 러시아어 · 프랑스어(`« »` 대사), 독일어(`„ “`) — 언어는 문단마다 판단하므로 한국어 글의 정리 결과는 그대로
+- 외국어 문단도 그 언어에 맞게 문장 나누기 — 중국어 · 일본어(띄어쓰기 없는 `。！？`), 영어 · 유럽어(약어 구별, `« »` `„ “` `»…«` 대사, 러시아 · 스페인식 줄표 `—` 대사), 그리스어 · 아랍어 · 힌디어 문장부호 — 언어는 문단마다 판단하므로 한국어 글의 정리 결과는 그대로
 
 **다듬기**
 - 연속 공백 · 전각 공백 · 탭 · 한글 채움 문자 정리, 문장부호 앞 공백 제거, 빠진 공백 넣기
@@ -100,7 +100,7 @@
 - 쪽 번호 · 반복 머리글 · 광고 · 주소 줄 · HTML 찌꺼기 제거, 사용자 규칙(정규식 포함)
 
 **파일**
-- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · GBK/GB2312 · Big5 · Windows-1252
+- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · GBK/GB2312 · Big5 · Windows-1250/1251/1252/1253/1254/1255/1256/1257/1258 · KOI8-R · Windows-874(태국어)
 - 확장자가 아니라 **파일 내용으로** 텍스트인지 확인 (옛 `.cap` 파일도 열림)
 - **EPUB 전자책** — 본문 글을 차례대로 꺼내 정리 · 읽기 (DRM이 걸린 책 제외, 추가 프로그램 없이 직접 처리)
 - 최대 100MB, 여러 파일 한꺼번에 변환, 원본은 그대로 두고 `_정리.txt`로 따로 저장
@@ -152,8 +152,8 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Chapter detection** — finds chapter titles even when buried inside a single long line, and builds a table of contents
 - **Korean-specific fixes** — joins decomposed jamo (NFD text from macOS), restores text spaced out letter by letter, removes Hanja in parentheses, converts full-width to half-width
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
-- **Other languages** — paragraphs in Chinese, Japanese, English, Russian, French and German are split into sentences by their own rules (CJK `。！？` without spaces, English abbreviations, `« »` and `„ “` quotes); the language is judged per paragraph, so Korean results are unaffected
-- **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1252
+- **Other languages** — paragraphs in Chinese, Japanese and Latin, Cyrillic or Greek-script languages are split into sentences by their own rules (CJK `。！？` without spaces, abbreviations, `« »` `„ “` quotes and dash dialogue), plus Arabic, Hindi and other sentence marks; the language is judged per paragraph, so Korean results are unaffected
+- **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
 - **Reading mode** — click or Space to turn pages, remembers your reading position, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
 

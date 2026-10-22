@@ -32,14 +32,21 @@ using std::wstring;
 typedef std::u32string U32;
 
 // ---------------------------------------------------------------------------
-enum { E_UTF8, E_UTF8BOM, E_CP949, E_UTF16LE, E_UTF16BE, E_SJIS, E_GBK, E_BIG5, E_W1252, E_JOHAB };
+enum { E_UTF8, E_UTF8BOM, E_CP949, E_UTF16LE, E_UTF16BE, E_SJIS, E_GBK, E_BIG5, E_W1252, E_JOHAB,
+       E_W1251, E_KOI8R, E_W1250, E_W1253, E_W1254, E_W1255, E_W1256, E_W1257, E_W1258, E_W874 };
 static const wchar_t* kEncName[] = {L"UTF-8", L"UTF-8 (BOM)", L"ANSI (CP949)", L"UTF-16 LE", L"UTF-16 BE",
-                                    L"일본어 (Shift-JIS)", L"중국어 간체 (GBK)", L"중국어 번체 (Big5)", L"서유럽 (Windows-1252)", L"한글 조합형 (Johab)"};
+                                    L"일본어 (Shift-JIS)", L"중국어 간체 (GBK)", L"중국어 번체 (Big5)", L"서유럽 (Windows-1252)", L"한글 조합형 (Johab)",
+                                    L"키릴 (Windows-1251)", L"러시아어 (KOI8-R)", L"중·동유럽 (Windows-1250)", L"그리스어 (Windows-1253)",
+                                    L"터키어 (Windows-1254)", L"히브리어 (Windows-1255)", L"아랍어 (Windows-1256)", L"발트어 (Windows-1257)",
+                                    L"베트남어 (Windows-1258)", L"태국어 (Windows-874)"};
 // 코드 페이지로 읽고 쓰는 인코딩 (유니코드가 아닌 것)
 static UINT EncCp(int enc) {
     switch (enc) {
     case E_CP949: return 949; case E_SJIS: return 932; case E_GBK: return 936;
     case E_BIG5: return 950; case E_W1252: return 1252; case E_JOHAB: return 1361;
+    case E_W1251: return 1251; case E_KOI8R: return 20866; case E_W1250: return 1250; case E_W1253: return 1253;
+    case E_W1254: return 1254; case E_W1255: return 1255; case E_W1256: return 1256; case E_W1257: return 1257;
+    case E_W1258: return 1258; case E_W874: return 874;
     default: return 0;
     }
 }
@@ -641,7 +648,8 @@ static U32 NormalizeNL(const U32& s) {
 }
 
 static U32 DecodeAuto(const std::string& b, int& enc);
-// force: 0 자동, 1 UTF-8, 2 CP949, 3 UTF-16, 4 Shift-JIS, 5 GBK, 6 Big5, 7 Windows-1252, 8 Johab
+// force: 0 자동, 1 UTF-8, 2 CP949, 3 UTF-16, 4 Shift-JIS, 5 GBK, 6 Big5, 7 Windows-1252, 8 Johab,
+//        9 Windows-1251, 10 KOI8-R, 11 Windows-1250, 12 1253, 13 1254, 14 1255, 15 1256, 16 1257, 17 1258, 18 874
 static U32 Decode(const std::string& b, int& enc, int force = -1);
 static int g_forceEnc = 0;
 static U32 Decode(const std::string& b, int& enc, int force) {
@@ -653,8 +661,9 @@ static U32 Decode(const std::string& b, int& enc, int force) {
         enc = bom ? E_UTF8BOM : E_UTF8;
         return bom ? Utf8ToU32(u + 3, n - 3) : Utf8ToU32(u, n);
     }
-    if (force == 2 || (force >= 4 && force <= 8)) {
-        static const int fe[] = {0, 0, E_CP949, 0, E_SJIS, E_GBK, E_BIG5, E_W1252, E_JOHAB};
+    if (force == 2 || (force >= 4 && force <= 18)) {
+        static const int fe[] = {0, 0, E_CP949, 0, E_SJIS, E_GBK, E_BIG5, E_W1252, E_JOHAB,
+                                 E_W1251, E_KOI8R, E_W1250, E_W1253, E_W1254, E_W1255, E_W1256, E_W1257, E_W1258, E_W874};
         enc = fe[force];
         UINT cp = EncCp(enc);
         int len = MultiByteToWideChar(cp, 0, b.data(), (int)n, nullptr, 0);
@@ -669,6 +678,73 @@ static U32 Decode(const std::string& b, int& enc, int force) {
         return bom ? Utf16ToU32(u + 2, n - 2, be) : Utf16ToU32(u, n, false);
     }
     return DecodeAuto(b, enc);
+}
+// 한 바이트 코드 페이지로 읽은 글에서, 그 언어에서 자주 쓰는 글자의 비율 (아스키 제외)
+static double SbCover(const std::string& b, size_t sn, UINT cp, const wchar_t* set, unsigned lo, unsigned hi, double* inRange,
+                      unsigned xlo = 1, unsigned xhi = 0) {  // xlo~xhi: 이 범위의 글자도 자주 쓰는 글자로 셈
+    int len = MultiByteToWideChar(cp, 0, b.data(), (int)sn, nullptr, 0);
+    if (len <= 0) { if (inRange) *inRange = 0; return 0; }
+    wstring w(len, 0);
+    MultiByteToWideChar(cp, 0, b.data(), (int)sn, &w[0], len);
+    CharLowerBuffW(&w[0], (DWORD)w.size());  // 대문자도 같은 글자로 셈
+    size_t na = 0, hit = 0, rg = 0;
+    for (wchar_t c : w) {
+        unsigned v = (unsigned short)c;
+        if (v < 0x80) continue;
+        na++;
+        if (wcschr(set, c) || (v >= xlo && v <= xhi)) hit++;
+        if (v >= lo && v <= hi) rg++;
+    }
+    if (inRange) *inRange = na ? (double)rg / na : 0;
+    return na ? (double)hit / na : 0;
+}
+// 키릴·그리스·히브리·아랍·태국 문자의 옛 인코딩: 읽은 글자 대부분이 그 문자이고 자주 쓰는 글자가 많으면 그것으로 봄 (-1 아님)
+static int SingleByteScript(const std::string& b, size_t sn) {
+    struct Cand { int enc; UINT cp; const wchar_t* set; unsigned lo, hi; double need; };
+    static const Cand cs[] = {
+        {E_W1251, 1251, L"оеаинтсрвлкмдпуі", 0x400, 0x4FF, 0.35},
+        {E_KOI8R, 20866, L"оеаинтсрвлкмдпуі", 0x400, 0x4FF, 0.35},
+        {E_W1253, 1253, L"αοετιηνσρκπυλμςάέίόή", 0x384, 0x3CE, 0.35},
+        {E_W1255, 1255, L"יוהלארמבנתשע", 0x591, 0x5F4, 0.35},
+        {E_W1256, 1256, L"الينمرتوبهعدفقسك", 0x600, 0x6FF, 0.35},
+        {E_W874, 874, L"านอรกเม่ิงยัีดลสวทต้", 0xE00, 0xE7F, 0.40},
+    };
+    // 이 문자들로 쓴 글은 글자 대부분이 아스키가 아님 (라틴 문자 글의 악센트 글자가 그리스·키릴 글자로 읽히는 것을 걸러 냄)
+    size_t hi = 0, al = 0;
+    for (size_t i = 0; i < sn; ++i) { unsigned char c = (unsigned char)b[i]; if (c >= 0x80) hi++; else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'z') al++; }
+    if (hi < al) return -1;
+    int best = -1; double bc = 0;
+    for (const Cand& c : cs) {
+        double rg = 0, cv = SbCover(b, sn, c.cp, c.set, c.lo, c.hi, &rg);
+        if (rg >= 0.85 && cv >= c.need && cv > bc) { bc = cv; best = c.enc; }
+    }
+    return best;
+}
+// 라틴 문자 글: 서유럽(1252)이 기본이고, 다른 코드 페이지가 그 언어 글자를 뚜렷이 더 많이 보여 줄 때만 바꿈
+static int LatinFamily(const std::string& b, size_t sn) {
+    static const wchar_t kCommon[] = L"–—…„“”‘’«»°·€";  // 어느 쪽으로 읽어도 같은 문장부호
+    struct Cand { int enc; UINT cp; const wchar_t* set; };
+    static const Cand cs[] = {
+        {E_W1252, 1252, L"éèàçêâîôùëïüöäßñáíóúãìò¿¡ÉÈÀÇÊÂÎÔÙÜÖÄÑÁÍÓÚ"},  // õ û 는 헝가리어 ő ű 와 겹쳐 뺌
+        {E_W1250, 1250, L"łąęśćżźńóčřšžěůýáíéťďňőűäöüôŁĄĘŚĆŻŹŃÓČŘŠŽĚŮÝÁÍÉŤĎŇŐŰ"},
+        {E_W1254, 1254, L"çğıöşüâîûéàèêëïôùÇĞİÖŞÜÂÎÛÉ"},
+        {E_W1257, 1257, L"ąčęėįšųūžāēīķļņõöüäĄČĘĖĮŠŲŪŽĀĒĪĶĻŅÕÖÜÄ"},
+        {E_W1258, 1258, L"ăâêôơưđàáãèéìíòóõùúýĂÂÊÔƠƯĐ\x0300\x0301\x0303\x0309\x0323"},
+    };
+    // 라틴 문자 글은 글자 대부분이 아스키 영문자 (그렇지 않은 글은 예전처럼 서유럽으로)
+    size_t hi = 0, al = 0;
+    for (size_t i = 0; i < sn; ++i) { unsigned char c = (unsigned char)b[i]; if (c >= 0x80) hi++; else if ((c | 0x20) >= 'a' && (c | 0x20) <= 'z') al++; }
+    if (hi > al) return E_W1252;
+    double base = -1; int best = E_W1252; double bc = 0;
+    for (const Cand& c : cs) {
+        wstring set = wstring(c.set) + kCommon;
+        // 베트남어(1258)는 Windows가 성조 부호를 합친 글자(ạ ở …)로 돌려줌
+        double cv = c.enc == E_W1258 ? SbCover(b, sn, c.cp, set.c_str(), 0, 0, nullptr, 0x1EA0, 0x1EF9)
+                                     : SbCover(b, sn, c.cp, set.c_str(), 0, 0, nullptr);
+        if (base < 0) { base = cv; bc = cv; continue; }
+        if (cv > bc && cv >= base + 0.10) { bc = cv; best = c.enc; }
+    }
+    return best;
 }
 static U32 DecodeAuto(const std::string& b, int& enc) {
     const unsigned char* u = (const unsigned char*)b.data();
@@ -758,9 +834,10 @@ static U32 DecodeAuto(const std::string& b, int& enc) {
         else if (koJohab >= 0.12) enc = E_JOHAB;                         // 옛 한글 조합형
         else if (ja >= 0.12) enc = E_SJIS;                               // 일본어
         else if (zs >= 0.08 || zt >= 0.08) enc = zs >= zt ? E_GBK : E_BIG5;  // 중국어
+        else if (int se = ko949 < 0.05 ? SingleByteScript(b, sn) : -1; se >= 0) enc = se;  // 키릴·그리스·히브리·아랍·태국
         else if (ok949) enc = E_CP949;
         else if (ok932 && range(w932, 0x4E00, 0x9FFF) >= 0.5) enc = E_SJIS;  // 가나 없이 한자만 있는 일본어
-        else if (strict(1252, w)) enc = E_W1252;                         // 서유럽
+        else if (strict(1252, w)) enc = LatinFamily(b, sn);              // 서유럽(기본)·중동유럽·터키·발트·베트남
         else enc = E_CP949;
     }
     UINT cp = EncCp(enc);
@@ -3390,7 +3467,10 @@ static void CreateUI() {
     g_chkHalf = MkCheck(ID_HALF, L"전각→반각", IniGet(L"half", 0) != 0);
 
     g_cbReadEnc = MkCombo(ID_READENC, {L"자동 판별", L"UTF-8", L"ANSI (CP949)", L"UTF-16", L"일본어 (Shift-JIS)", L"중국어 간체 (GBK)",
-                                       L"중국어 번체 (Big5)", L"서유럽 (Windows-1252)", L"한글 조합형 (Johab)"}, IniGet(L"readenc", 0));
+                                       L"중국어 번체 (Big5)", L"서유럽 (Windows-1252)", L"한글 조합형 (Johab)",
+                                       L"키릴 (Windows-1251)", L"러시아어 (KOI8-R)", L"중·동유럽 (Windows-1250)", L"그리스어 (Windows-1253)",
+                                       L"터키어 (Windows-1254)", L"히브리어 (Windows-1255)", L"아랍어 (Windows-1256)", L"발트어 (Windows-1257)",
+                                       L"베트남어 (Windows-1258)", L"태국어 (Windows-874)"}, IniGet(L"readenc", 0));
     g_forceEnc = CbSel(g_cbReadEnc);
     g_cbEnc = MkCombo(ID_ENC, {L"원본과 같게", L"UTF-8 (BOM)", L"UTF-8", L"ANSI (CP949)", L"UTF-16"}, IniGet(L"enc", 0));
     g_chkSync = MkCheck(ID_SYNC, L"클릭한 곳 결과와 연동", IniGet(L"sync", 1) != 0);

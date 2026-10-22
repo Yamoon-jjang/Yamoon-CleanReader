@@ -35,8 +35,17 @@ bool isAsciiAlpha(C c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 bool isDigit(C c) { return (c >= '0' && c <= '9') || (c >= 0xFF10 && c <= 0xFF19); }
 bool isLetterDigit(C c) {
     if (c < 0x80) return isAsciiAlpha(c) || isDigit(c);
-    return isHangul(c) || isKanaHan(c) || isDigit(c) || (c >= 0xC0 && c <= 0x24F) || (c >= 0x370 && c <= 0x4FF) ||
-           (c >= 0xFF21 && c <= 0xFF3A) || (c >= 0xFF41 && c <= 0xFF5A) || (c >= 0x2160 && c <= 0x217F);
+    if (isHangul(c) || isKanaHan(c) || isDigit(c) || (c >= 0xC0 && c <= 0x24F) || (c >= 0x370 && c <= 0x4FF) ||
+        (c >= 0xFF21 && c <= 0xFF3A) || (c >= 0xFF41 && c <= 0xFF5A) || (c >= 0x2160 && c <= 0x217F))
+        return true;
+    // 그 밖의 문자: 아르메니아·히브리·아랍·인도계·태국·라오·티베트·미얀마·조지아·에티오피아·크메르·베트남 (문장부호는 제외)
+    if (c == 0x589 || c == 0x5BE || c == 0x5C0 || c == 0x5C3 || c == 0x5C6 || c == 0x60C || c == 0x61B || c == 0x61F ||
+        c == 0x66A || c == 0x66B || c == 0x66C || c == 0x6D4 || c == 0x964 || c == 0x965 || c == 0xF0D || c == 0x104A ||
+        c == 0x104B || (c >= 0x1360 && c <= 0x1368) || (c >= 0x17D4 && c <= 0x17DA))
+        return false;
+    return (c >= 0x530 && c <= 0x74F) || (c >= 0x900 && c <= 0xDFF) || (c >= 0xE00 && c <= 0xEFF) || (c >= 0xF00 && c <= 0xFFF) ||
+           (c >= 0x1000 && c <= 0x109F) || (c >= 0x10A0 && c <= 0x10FF) || (c >= 0x1200 && c <= 0x137F) ||
+           (c >= 0x1780 && c <= 0x17FF) || (c >= 0x1E00 && c <= 0x1EFF);
 }
 // 옛 모바일 txt는 CP949 바이트 수로 잘랐으므로 그 기준의 폭
 int cw(C c) {
@@ -50,7 +59,11 @@ int cw(C c) {
 }
 int widthOf(const S& s) { int w = 0; for (C c : s) w += cw(c); return w; }
 
-bool isStrongTerm(C c) { return c == '.' || c == '!' || c == '?' || c == 0x3002 || c == 0xFF01 || c == 0xFF1F || c == 0xFF0E; }
+bool isStrongTerm(C c) {
+    return c == '.' || c == '!' || c == '?' || c == 0x3002 || c == 0xFF01 || c == 0xFF1F || c == 0xFF0E ||
+           c == 0x61F || c == 0x6D4 || c == 0x964 || c == 0x965 || c == 0x589 || c == 0x1362 || c == 0x37E ||  // ؟ ۔ । ॥ ։ ። ;
+           c == 0x104B || c == 0xF0D || c == 0x17D4;  // 미얀마 ။ 티베트 ། 크메르 ។
+}
 bool isWeakTerm(C c) {
     return c == 0x2026 || c == 0x2025 || c == '~' || c == 0xFF5E || c == 0x2661 || c == 0x2665 || c == 0x266A ||
            c == 0x266C || c == 0x2606 || c == 0x2605;
@@ -58,6 +71,42 @@ bool isWeakTerm(C c) {
 bool isTermChar(C c) { return isStrongTerm(c) || isWeakTerm(c); }
 bool isOpenQuote(C c) { return c == '"' || c == 0x201C || c == 0x201E || c == 0x2018 || c == '\'' || c == 0x300C || c == 0x300E || c == 0xAB || c == 0x2039; }
 bool isCloseQuote(C c) { return c == '"' || c == 0x201D || c == 0x2019 || c == '\'' || c == 0x300D || c == 0x300F || c == 0xBB || c == 0x203A; }
+bool isUpperWest(C c) {  // 대소문자가 있는 문자(라틴·그리스·키릴)의 대문자
+    if (c < 0x80) return c >= 'A' && c <= 'Z';
+    if (c >= 0xC0 && c <= 0xDE) return c != 0xD7;
+    if (c >= 0x100 && c <= 0x17F) {  // 폴란드어·체코어·터키어 등
+        if (c == 0x130 || c == 0x178) return true;
+        if (c == 0x131 || c == 0x138 || c == 0x149 || c == 0x17F) return false;
+        if ((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) return (c & 1) != 0;
+        return (c & 1) == 0;
+    }
+    if (c == 0x386 || (c >= 0x388 && c <= 0x38F && c != 0x38B && c != 0x38D) || (c >= 0x391 && c <= 0x3AB && c != 0x3A2)) return true;  // 그리스어
+    if (c >= 0x400 && c <= 0x42F) return true;                                      // 키릴 (우크라이나어 Є І Ї 포함)
+    if (c >= 0x460 && c <= 0x4FF) return (c & 1) == 0 && !(c >= 0x482 && c <= 0x489);  // 키릴 확장 (Ґ 등)
+    if (c >= 0x1E00 && c <= 0x1EFF) return (c & 1) == 0;                            // 베트남어
+    return false;
+}
+bool isLowerWest(C c) {
+    if (c < 0x80) return c >= 'a' && c <= 'z';
+    if (c >= 0xDF && c <= 0xFF) return c != 0xF7;
+    if (c >= 0x100 && c <= 0x17F) return !isUpperWest(c);
+    if (c == 0x390 || (c >= 0x3AC && c <= 0x3CE)) return true;
+    if (c >= 0x430 && c <= 0x45F) return true;
+    if (c >= 0x460 && c <= 0x4FF) return (c & 1) != 0 && !(c >= 0x482 && c <= 0x489);
+    if (c >= 0x1E00 && c <= 0x1EFF) return (c & 1) != 0;
+    return false;
+}
+bool isDashC(C c) { return c == 0x2014 || c == 0x2013; }
+// 러시아어 등에서 "— 대사"로 시작하는 문단 (한글·한자·가나가 없는 글)
+bool isDashDialogue(const S& u) {
+    size_t i = 0;
+    while (i < u.size() && (isWS(u[i]) || isInvisible(u[i]))) ++i;
+    if (i + 1 >= u.size() || !isDashC(u[i])) return false;
+    C d = u[i + 1];
+    if (!(isWS(d) || isUpperWest(d) || isLowerWest(d) || d == 0xBF || d == 0xA1 || d == 0xAB || d == '"' || d == 0x201E || d == 0x201C)) return false;
+    for (C c : u) if (isHangul(c) || isKanaHan(c)) return false;
+    return true;
+}
 bool isCloseBracket(C c) { return c == ')' || c == ']' || c == 0x3011 || c == 0x3009 || c == 0x300B || c == 0xFF09; }
 
 // 문장 끝으로 볼 만한 한글 어미
@@ -93,9 +142,15 @@ int endKind(const S& t) {
     C c = lastVis(t);
     if (!c) return 0;
     if (isCloseQuote(c)) return 2;
+    if (c == 0x201C || c == 0xAB) {
+        size_t k = t.size(); while (k > 0 && isInvisible(t[k - 1])) --k;
+        bool hg = false; for (C x : t) if (isHangul(x)) { hg = true; break; }
+        if (!hg && k >= 2 && isTermChar(t[k - 2])) return 2;
+    }
     if (isCloseBracket(c)) return 1;
     if (isTermChar(c)) return 2;
     if (isLineEndSyl(c)) return 1;
+    if (c >= 0xE00 && c <= 0xEFF) return 1;  // 태국어·라오어는 문장 끝 부호가 없어 줄 끝을 문장 끝으로 봄
     if (c >= 0x3131 && c <= 0x318E) return 1;  // ㅋㅋ ㅎㅎ ㅠㅠ
     return 0;
 }
@@ -151,15 +206,18 @@ struct Line {
 bool isAbbrev(const S& p, size_t dot) {
     // dot 위치의 '.' 앞 단어가 약어/이니셜인지
     size_t b = dot;
-    auto wl = [](C c) { return isAsciiAlpha(c) || (c >= 0xC0 && c <= 0x24F && c != 0xD7 && c != 0xF7) || (c >= 0x400 && c <= 0x4FF); };
+    auto wl = [](C c) { return isUpperWest(c) || isLowerWest(c) || (c >= 0x180 && c <= 0x24F); };
     while (b > 0 && wl(p[b - 1])) --b;
     size_t len = dot - b;
     if (len == 0) return false;
-    if (len == 1 && ((p[b] >= 'A' && p[b] <= 'Z') || (p[b] >= 0x410 && p[b] <= 0x42F))) return true;  // J. K.
+    if (len == 1 && isUpperWest(p[b])) return true;  // J. K.
     if (len == 1 && b > 0 && p[b - 1] == '.') return true;  // p.m. i.e. z.B. Т.е. 의 끝 글자
     S word = p.substr(b, len);
     for (auto& ch : word) if (ch >= 'A' && ch <= 'Z') ch += 32;
-    static const char32_t* ab[] = {U"mr", U"mrs", U"ms", U"dr", U"st", U"vs", U"etc", U"no", U"jr", U"sr", U"prof", U"e", U"i", U"inc", U"ltd", U"co", U"vol", U"fig", U"approx", U"nr", U"str", U"bzw", U"usw", U"vgl", U"ca", U"mme", U"mlle", nullptr};
+    static const char32_t* ab[] = {U"mr", U"mrs", U"ms", U"dr", U"st", U"vs", U"etc", U"no", U"jr", U"sr", U"prof", U"e", U"i", U"inc", U"ltd", U"co", U"vol", U"fig", U"approx", U"nr", U"str", U"bzw", U"usw", U"vgl", U"ca", U"mme", U"mlle",
+                                  U"jan", U"feb", U"mar", U"apr", U"jun", U"jul", U"aug", U"sep", U"sept", U"oct", U"nov", U"dec",
+                                  U"gen", U"gov", U"sgt", U"capt", U"lt", U"col", U"rev", U"hon", U"dept", U"univ", U"corp", U"messrs",
+                                  U"sig", U"sigg", U"dott", U"avv", U"ing", U"sra", U"srta", U"hr", U"fr", U"frl", U"mgr", nullptr};
     for (int i = 0; ab[i]; ++i) if (word == ab[i]) return true;
     return false;
 }
@@ -194,7 +252,19 @@ bool isBrClose(C c) {
 }
 C qCloseOf(C c) { return c == 0x201E ? 0x201C : c == 0x201C ? 0x201D : c == 0x2018 ? 0x2019 : c == 0x300C ? 0x300D : c == 0x300E ? 0x300F : 0; }
 bool isQClose(C c) { return c == 0x201D || c == 0x2019 || c == 0x300D || c == 0x300F; }
-void encloseRoles(const S& p, int startQ, std::vector<char>& role, int& endQ) {
+void encloseRoles(const S& p0, int startQ, std::vector<char>& role, int& endQ) {
+    // 독일식 »대사«: 한글 없는 문단에서 » 가 « 보다 먼저 나오고 바로 뒤에 글자가 오면 짝을 뒤집어 봄
+    S sw; const S* pp = &p0;
+    {
+        size_t fa = p0.find(0xAB), fb = p0.find(0xBB);
+        bool hg = false; for (C x : p0) if (isHangul(x)) { hg = true; break; }
+        if (!hg && fb != S::npos && fa != S::npos && fb < fa && fb + 1 < p0.size() && !isWS(p0[fb + 1])) {
+            sw = p0;
+            for (auto& x : sw) { if (x == 0xAB) x = 0xBB; else if (x == 0xBB) x = 0xAB; }
+            pp = &sw;
+        }
+    }
+    const S& p = *pp;
     size_t n = p.size();
     role.assign(n, 0);
     endQ = 0;
@@ -250,7 +320,7 @@ void encloseRoles(const S& p, int startQ, std::vector<char>& role, int& endQ) {
     }
 }
 
-std::vector<Range> splitSentences(const S& p, int startQ = 0) {
+std::vector<Range> splitSentences(const S& p, int startQ = 0, bool inSpeech = false) {
     std::vector<Range> out;
     size_t n = p.size();
     std::vector<char> role; int endQ;
@@ -260,6 +330,10 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
     for (C c : p) { if (isHangulSyl(c)) nHg++; else if (isKanaHan(c)) nKH++; }
     bool cjkPara = nKH > 0 && nHg * 20 < nKH;
     bool westPara = nHg == 0 && nKH == 0;  // 한글·한자·가나가 없는 글 (영어·유럽어)
+    size_t nGr = 0, nLa = 0;
+    if (westPara) for (C c : p) { if (c >= 0x370 && c <= 0x3FF) nGr++; else if (isAsciiAlpha(c)) nLa++; }
+    bool greekPara = nGr > nLa;  // 그리스어: ; 가 물음표
+    auto term = [&](C c) { return isTermChar(c) || (greekPara && c == ';'); };
     int depth = startQ ? 1 : 0;       // 따옴표·괄호 깊이
     bool encAtStart = startQ != 0;    // 가장 바깥 것이 조각 첫머리에서 열렸나
     bool encQuote = startQ != 0;      // 가장 바깥 것이 따옴표인가 (아니면 괄호)
@@ -275,6 +349,9 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
         seenText = false;
     };
     auto nextNonWS = [&](size_t i) { while (i < n && isWS(p[i])) ++i; return i; };
+    // "— 대사! — сказал он." 처럼 줄표로 쓴 짧은 대사 문단은 따옴표 대사처럼 한 덩어리로 둠
+    // (긴 대사는 splitLongSpeech가 대사 안에서 줄만 바꿈)
+    if (westPara && !inSpeech && isDashDialogue(p)) { cutAt(n); return out; }
     // 가장 바깥 따옴표·괄호가 닫힌 직후 (i = 닫는 글자 위치)
     // - 안에서 문장이 끝났고 바로 다음이 새 대사면 거기서 나눔: "안녕." "반가워."
     // - 대사 뒤에 이어지는 서술은 붙여 둠: "빨리 시작해!" 드렉셀은 고함을 질렀다.
@@ -284,11 +361,11 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
         bool ended = isTermChar(last);
         size_t q = nextNonWS(i + 1);
         if (q >= n) return;
-        if (ended && isOpenQuote(p[q]) && p[q] != '\'') { cutAt(q); return; }
+        if (ended && ((isOpenQuote(p[q]) && p[q] != '\'') || (p[q] == 0xBB && role[q] == 1))) { cutAt(q); return; }
         if (!encQuote && encAtStart && ended && (q > i + 1 || cjkPara) && !attachedAfterQuote(p, q)) { cutAt(q); return; }
         // 영어·유럽어: 대사가 끝나고 대문자로 새 문장 시작 ("Yes." It cost...)
         C u = p[q];
-        if (westPara && encQuote && ended && q > i + 1 && ((u >= 'A' && u <= 'Z') || (u >= 0x410 && u <= 0x42F) || (u >= 0xC0 && u <= 0xDE && u != 0xD7))) cutAt(q);
+        if (westPara && encQuote && ended && q > i + 1 && (isUpperWest(u) || u == 0xBF || u == 0xA1)) cutAt(q);
     };
 
     auto isSepSym = [](C c) {
@@ -320,15 +397,16 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
             continue;
         }
         if (depth > 0) continue;
-        if (!isTermChar(c)) continue;
+        if (!term(c)) continue;
 
         // 종결부호 묶음
         size_t j = i;
-        while (j + 1 < n && isTermChar(p[j + 1])) ++j;
+        while (j + 1 < n && term(p[j + 1])) ++j;
         bool strong = false;
         int dotCount = 0;
         for (size_t k = i; k <= j; ++k) {
-            if (p[k] == '!' || p[k] == '?' || p[k] == 0x3002 || p[k] == 0xFF01 || p[k] == 0xFF1F) strong = true;
+            if (p[k] == '!' || p[k] == '?' || p[k] == 0x3002 || p[k] == 0xFF01 || p[k] == 0xFF1F ||
+                (p[k] != '.' && p[k] != 0xFF0E && isStrongTerm(p[k])) || (greekPara && p[k] == ';')) strong = true;
             if (p[k] == '.') dotCount++;
         }
         bool onlyOneDot = (j == i && c == '.');
@@ -347,6 +425,30 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
         size_t after = j + 1;
         if (after >= n) { i = j; continue; }
         C nx = p[after];
+        if (westPara) {
+            size_t q = nextNonWS(after);
+            // 대사 뒤 말꼬리 "— сказал он" "– said he" 는 앞 대사에 붙임
+            if (q < n && isDashC(p[q])) { size_t r = nextNonWS(q + 1); if (r < n && isLowerWest(p[r])) { i = j; continue; } }
+            // 문장은 소문자로 시작하지 않으므로, 뒤가 소문자면 약어이거나 문장 중간: "Np. wczoraj" "p. m. con" "т.зв. «новий»"
+            size_t r = q;
+            while (r < n && (isOpenQuote(p[r]) || isBrOpen(p[r]))) ++r;
+            if (r < n && r > after && isLowerWest(p[r])) { i = j; continue; }
+            // 소문자 약어 뒤 숫자: "godz. 5" "str. 12" "s. 30"
+            if (onlyOneDot && q > after && q < n && isDigit(p[q])) {
+                size_t b = i; while (b > 0 && isLowerWest(p[b - 1])) --b;
+                if (i > b && i - b <= 5 && (b == 0 || !isUpperWest(p[b - 1]))) { i = j; continue; }
+            }
+            // 독일어 날짜 "am 3. Oktober"
+            if (onlyOneDot && isDigit(before) && q < n && isUpperWest(p[q])) {
+                static const char32_t* mon[] = {U"Januar", U"Februar", U"März", U"April", U"Mai", U"Juni", U"Juli", U"August",
+                                                U"September", U"Oktober", U"November", U"Dezember", U"Jänner", nullptr};
+                bool m = false;
+                for (int k = 0; mon[k] && !m; ++k) if (startsWith(p, q, mon[k])) m = true;
+                if (m) { i = j; continue; }
+            }
+            // 말줄임표 뒤 대문자로 새 문장: "ворчать… Когда" "more... Wait" "¿Qué?"
+            if (!endOk && isWS(nx) && q < n && (isUpperWest(p[q]) || p[q] == 0xBF || p[q] == 0xA1)) { cutAt(q); i = j; continue; }
+        }
         auto jamoTail = [&](size_t q) { return q < n && p[q] >= 0x3131 && p[q] <= 0x318E; };  // "뭐해? ㅋㅋ" "좋아!ㅎㅎ" 같은 웃음·울음 표시는 앞 문장에 붙임
         if (isWS(nx)) {
             if (endOk && !(strong && jamoTail(nextNonWS(after)))) cutAt(nextNonWS(after));
@@ -362,7 +464,10 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
                 if (p[k] == 0x3002 || p[k] == 0xFF01 || p[k] == 0xFF1F) wide = true;
                 if (p[k] != 0x3002) dotsOnly = false;
             }
-            if (wide && !dotsOnly) cutAt(after);
+            // 반각 부호로 쓴 글: "他走了.她问" "彼は言った!彼女は"
+            bool half = isKanaHan(before) && (isKanaHan(nx) || isOpenQuote(nx)) &&
+                        (strong || onlyOneDot) && p[i] != 0x2026 && p[i] != 0x2025;
+            if ((wide && !dotsOnly) || half) cutAt(after);
         }
         i = j;
     }
@@ -371,6 +476,7 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0) {
 }
 
 bool isDialogue(const S& u) {
+    if (isDashDialogue(u)) return true;
     C f = firstVis(u);
     if (!isOpenQuote(f)) return false;
     if (f == 0xAB || f == 0x2039) {  // «제목»을 처럼 닫는 따옴표 뒤에 한글이 붙으면 제목·인용
@@ -533,7 +639,7 @@ TM fixSpacing(const TM& in, int& fixes, bool& letterSpaced, int startQ = 0) {
     {
         bool hg = false, fr = false;
         for (C c : t) { if (isHangul(c) || isKanaHan(c)) { hg = true; break; } if (c == 0xAB || c == 0xBB || c == 0xE9 || c == 0xE8 || c == 0xEA || c == 0xE0 || c == 0xE7 || c == 0xF9) fr = true; }
-        frPara = fr && !hg;
+        frPara = !hg; (void)fr;
     }
     // 4) 문장부호 주변
     TM r; r.t.reserve(n + n / 20); r.m.reserve(n + n / 20);
@@ -1203,6 +1309,9 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
     } else {
         size_t i = 0;
         while (i < v.size() && isWS(v[i])) ++i;
+        if (i < v.size() && isDashDialogue(v)) {  // "— 대사 … — сказал он. — 대사 …" 문단 전체가 대사
+            a = i; b = v.size();
+        } else {
         if (i >= v.size() || role[i] != 1 || isBrOpen(v[i])) { out.push_back(x); return out; }  // 따옴표로 시작하는 대사만
         int d = 0;
         size_t k = i;
@@ -1211,9 +1320,10 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
             else if (role[k] == 2 && --d == 0) break;
         }
         a = i + 1; b = k;
+        }
     }
     if (b <= a || b - a < kLongSpeech) { out.push_back(x); return out; }
-    std::vector<Range> rs = splitSentences(v.substr(a, b - a));
+    std::vector<Range> rs = splitSentences(v.substr(a, b - a), 0, true);
     size_t len = b - a;
     if (!(len >= kLongSpeech && rs.size() >= 3)) { out.push_back(x); return out; }
     size_t prev = 0;
@@ -1227,7 +1337,9 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
     TM last = x.sub(prev, x.t.size() - prev);
     trimTailWS(last);
     out.push_back(last);
-    // 말줄임표로 끝난 조각은 다음 조각과 이어 둠
+    // 말줄임표로 끝난 조각은 다음 조각과 이어 둠 (영어·유럽어 글에서 다음 조각이 대문자로 시작하면 새 문장)
+    bool westV = true;
+    for (C c : v) if (isHangul(c) || isKanaHan(c)) { westV = false; break; }
     std::vector<TM> merged;
     for (auto& t : out) {
         if (!merged.empty()) {
@@ -1235,7 +1347,7 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
             size_t k = pt.size();
             while (k > 0 && (isWS(pt[k - 1]) || isInvisible(pt[k - 1]))) --k;
             bool ell = k > 0 && (pt[k - 1] == 0x2026 || pt[k - 1] == 0x2025 || (pt[k - 1] == '.' && k >= 2 && pt[k - 2] == '.'));
-            if (ell) { merged.back().add(U' ', t.first()); merged.back().add(t); continue; }
+            if (ell && !(westV && isUpperWest(firstVis(t.t)))) { merged.back().add(U' ', t.first()); merged.back().add(t); continue; }
         }
         merged.push_back(t);
     }
@@ -1731,6 +1843,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (x == ',' || x == 0xFF0C || x == 0x3001) return U" ";
         if (y == ',' || y == '.' || y == '!' || y == '?' || y == ')' || y == ']' || y == 0x201D || y == 0x2019 ||
             y == 0x300D || y == 0x300F || y == 0xFF0C || y == 0x3001) return U"";
+        if ((x == 0x201C || x == 0xAB) && endKind(a.t) == 2) return U" ";  // 닫는 „…“ »…«
         if (x == 0x201C || x == 0x2018 || x == 0x300C || x == 0x300E || x == '(' || x == '[') return U"";
         if (isHangulSyl(x) && isHangulSyl(y) && endKind(a.t) == 0) {
             // 다음 줄이 한 글자(+문장부호)뿐이면 단어가 쪼개진 것: "뻗었\n다."
@@ -1982,6 +2095,8 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             // 대사 바로 뒤의 짧은 말꼬리("수진이 물었다.")는 대사에 붙임
             TM cur; bool lastDlg = false; bool pushed = p.cont; bool firstSoft = p.soft;
             bool srcLong = pv.size() > 400;  // 작가가 나눈 보통 문단이 아니라 뭉친 글
+            bool westP = true;  // 한글·한자·가나가 없는 문단 (영어·유럽어)
+            for (C c : pv) if (isHangul(c) || isKanaHan(c)) { westP = false; break; }
             auto endsEllipsis = [](const S& t) {
                 size_t k = t.size();
                 while (k > 0 && (isWS(t[k - 1]) || isInvisible(t[k - 1]))) --k;
@@ -2004,7 +2119,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 bool dlg = isDialogue(u.t);
                 bool sym = isSymbolLine(u.t);
                 bool glue = !cur.t.empty() && !dlg && !sym &&
-                            (!lastDlg && endsEllipsis(cur.t));
+                            (!lastDlg && endsEllipsis(cur.t)) && !(westP && isUpperWest(firstVis(u.t)));
                 if (!glue && !cur.t.empty()) { Para q{cur, 0, 0}; q.cont = pushed; q.soft = firstSoft; q.fromLong = srcLong; firstSoft = false; outP.push_back(q); pushed = true; cur = TM(); }
                 if (sym) { outP.push_back({u, 2, 0}); pushed = false; lastDlg = false; continue; }
                 if (!cur.t.empty()) cur.add(U' ', u.first());
