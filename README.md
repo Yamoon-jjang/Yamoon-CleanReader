@@ -5,9 +5,10 @@
 **정리하고, 바로 읽는다.**
 
 망가진 TXT·EPUB을 깨끗한 문단으로 되살리는 **정리기**와, 그 글을 책처럼 편하게 읽는 **리더기(TXT 뷰어 · 소설 뷰어)** 를<br>
-하나의 프로그램에 담은 Windows 앱
+하나의 프로그램에 담은 Windows 앱<br>
+한국어 소설에 맞춰 다듬었고, **중국어 · 일본어 · 영어 · 유럽어 · 러시아어 등 여러 나라 글도 그 언어답게** 정리합니다.
 
-<sub>A lightweight Windows TXT cleaner and ebook reader that restores broken line breaks into proper paragraphs — built for Korean novels and web text. · <a href="#english">English summary</a></sub>
+<sub>A lightweight Windows TXT cleaner and ebook reader that restores broken line breaks into proper paragraphs — built for Korean novels and web text, with sentence and dialogue rules for many other languages. · <a href="#english">English summary</a></sub>
 
 [![Release](https://img.shields.io/github/v/release/Yamoon-jjang/Yamoon-CleanReader?label=%EB%B0%B0%ED%8F%AC%EB%B3%B8&color=2f5aa8)](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest)
 ![Platform](https://img.shields.io/badge/Windows-7%20%7C%208%20%7C%2010%20%7C%2011-0078D6)
@@ -56,6 +57,29 @@
 
 여러 줄에 걸친 대사는 닫는 따옴표까지 한 덩어리로 묶고, 말줄임표 · 문장 속 인용 · 괄호 안에서는 문장을 나누지 않으며, `1,000`이나 `3.14` 같은 숫자와 `Mr.` 같은 약어도 구별합니다.
 
+## 여러 나라 글도 그 언어답게
+
+나라마다 문장을 끝내는 부호, 대사를 쓰는 방식, 약어 습관이 다릅니다. 한국어 규칙을 그대로 들이대면 중국어 글은 한 문장도 나뉘지 않고, 러시아어 대사는 말꼬리가 뚝뚝 떨어져 나갑니다.
+
+클린리더는 **문단마다 어느 문자로 쓴 글인지 먼저 보고**, 그 언어의 규칙으로 정리합니다. 그래서 번역 소설처럼 한국어 글 속에 원문 문단이 섞여 있어도 각각 제대로 정리되고, 한국어 문장에 한자나 `。` 가 조금 섞인 정도로는 한국어 정리 결과가 달라지지 않습니다.
+
+| 언어 | 문장 나누기 | 대사 · 따옴표 | 옛 인코딩 자동 판별 |
+|---|---|---|---|
+| **한국어** | 어미 · 조사까지 보는 전용 규칙 | `" "` `' '` `「 」` `『 』` · 여러 줄 대사 | CP949(EUC-KR) · 조합형 |
+| **중국어** (간체 · 번체) | 띄어쓰기 없는 `。！？`, 반각 `. ! ?` | `“ ”` `「 」` · 대사 뒤 서술은 붙여 둠 | GBK · Big5 |
+| **일본어** | 띄어쓰기 없는 `。！？`, `。。。` 말줄임은 그대로 | `「 」` `『 』` | Shift-JIS |
+| **영어** | `Mr.` `a.m.` `U.S.A.` `Jan. 3` 같은 약어 구별 | `" "` `' '` · `"Yes." It was…` 다음 문장 구분 | Windows-1252 |
+| **프랑스어 · 독일어 · 스페인어 · 이탈리아어 · 포르투갈어** | 각국 약어 · 날짜(`am 3. Oktober`) 구별 | `« »` `„ “` `»…«` · 스페인식 `—¿…? —preguntó—` | Windows-1252 |
+| **폴란드어 · 체코어 · 헝가리어 · 터키어 · 발트어** | `Np.` `godz. 5` 같은 약어 구별 | `„ “` · 줄표 `—` 대사 | Windows-1250 · 1254 · 1257 |
+| **러시아어 · 우크라이나어 등 키릴 문자** | `т.е.` 같은 약어 구별, `…` 뒤 새 문장 | 줄표 대사(`— Да! — сказал он.`)를 한 덩어리로 | Windows-1251 · KOI8-R |
+| **그리스어 · 베트남어** | 그리스어 물음표 `;`, 확장 라틴 대문자 인식 | 줄표 대사 | Windows-1253 · 1258 |
+| **아랍어 · 히브리어 · 힌디어 · 미얀마어** | `؟` `।` `॥` `။` 같은 그 언어의 문장 끝 부호 | `« »` `" "` (오른쪽→왼쪽 글자도 바르게 표시) | Windows-1256 · 1255 |
+| **태국어** | 문장 끝 부호가 없는 언어라 줄바꿈을 그대로 존중 | — | Windows-874 |
+
+라틴 · 키릴 · 그리스 문자의 문장은 대문자로 시작한다는 점을 이용해, 언어마다 약어 목록을 다 갖추지 않아도 `p. m.` `Np.` `т.зв.` 처럼 처음 보는 약어에서 문장을 잘못 끊지 않습니다. UTF-8 · UTF-16 글은 언어와 상관없이 그대로 열리고, 자동 판별이 틀리면 옵션 **[읽기]** 에서 인코딩을 직접 고를 수 있습니다.
+
+> 중국어 · 일본어 · 영어 원문을 번역해 읽는다면, 함께 만든 **[야문 Novel Translator](https://github.com/Yamoon-jjang/Yamoon-Novel-Translator)** 로 옮긴 뒤 버튼 하나로 클린리더에서 정리해 읽을 수 있습니다.
+
 ## 한눈에 보기
 
 ### 한국어 특수 문제를 한 번에
@@ -91,7 +115,7 @@
 - 회차 · 장 제목 인식 — `제1화`, `[2화]`, `【3장】`, `<외전>`, `《프롤로그》` — 수량 표현(`2장 분량의`)과는 구별
 - 꾸밈 제목(`──────` / 제목 / `──────`), 장면 구분선, 가운데 정렬 머리말 보존
 - 글 끝 덧붙임(`PS:`, `작가의 말`, `후기:`) 앞에서 문단 나누기
-- 외국어 문단도 그 언어에 맞게 문장 나누기 — 중국어 · 일본어(띄어쓰기 없는 `。！？`), 영어 · 유럽어(약어 구별, `« »` `„ “` `»…«` 대사, 러시아 · 스페인식 줄표 `—` 대사), 그리스어 · 아랍어 · 힌디어 문장부호 — 언어는 문단마다 판단하므로 한국어 글의 정리 결과는 그대로
+- 다국어 정리 — 문단마다 언어를 판단해 그 언어의 문장 · 대사 규칙으로 정리 ([여러 나라 글도 그 언어답게](#여러-나라-글도-그-언어답게))
 
 **다듬기**
 - 연속 공백 · 전각 공백 · 탭 · 한글 채움 문자 정리, 문장부호 앞 공백 제거, 빠진 공백 넣기
@@ -100,7 +124,7 @@
 - 쪽 번호 · 반복 머리글 · 광고 · 주소 줄 · HTML 찌꺼기 제거, 사용자 규칙(정규식 포함)
 
 **파일**
-- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · GBK/GB2312 · Big5 · Windows-1250/1251/1252/1253/1254/1255/1256/1257/1258 · KOI8-R · Windows-874(태국어)
+- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · GBK/GB2312 · Big5 · Windows-1250~1258 · KOI8-R · Windows-874 — 저장할 때도 같은 인코딩으로
 - 확장자가 아니라 **파일 내용으로** 텍스트인지 확인 (옛 `.cap` 파일도 열림)
 - **EPUB 전자책** — 본문 글을 차례대로 꺼내 정리 · 읽기 (DRM이 걸린 책 제외, 추가 프로그램 없이 직접 처리)
 - 최대 100MB, 여러 파일 한꺼번에 변환, 원본은 그대로 두고 `_정리.txt`로 따로 저장
@@ -132,8 +156,6 @@
 
 자세한 사용법은 함께 들어 있는 `README.txt`, 바로 시험해 볼 수 있는 예제는 `samples` 폴더에 있습니다.
 
-> 중국어 · 일본어 · 영어 소설을 한국어로 옮기려면 함께 만든 **[야문 Novel Translator](https://github.com/Yamoon-jjang/Yamoon-Novel-Translator)** 를 써 보세요. 번역이 끝나면 버튼 하나로 클린리더에서 열어 정리하고 읽을 수 있습니다.
-
 ## 소스에서 빌드하기
 
 명령은 [BUILD.txt](BUILD.txt)에 있습니다. 정보 창의 **빌드** 줄에 빌드 시각과 커밋이 표시되어, 같은 버전이라도 어느 빌드인지 구분할 수 있습니다.
@@ -144,7 +166,7 @@
 
 ## English
 
-**Yamoon CleanReader** is a lightweight Windows app that combines a **TXT cleaner** and an **ebook reader** in one window. It repairs broken line breaks in TXT and EPUB files and restores proper paragraphs, then lets you read the result like a book. It is designed mainly for **Korean novels and web text**, and the interface is in Korean.
+**Yamoon CleanReader** is a lightweight Windows app that combines a **TXT cleaner** and an **ebook reader** in one window. It repairs broken line breaks in TXT and EPUB files and restores proper paragraphs, then lets you read the result like a book. It is designed mainly for **Korean novels and web text** (the interface is in Korean), but it also cleans text in many other languages by their own rules.
 
 Instead of blindly removing line breaks, it first analyzes how the whole file breaks its lines, then cleans it accordingly.
 
@@ -152,7 +174,7 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Chapter detection** — finds chapter titles even when buried inside a single long line, and builds a table of contents
 - **Korean-specific fixes** — joins decomposed jamo (NFD text from macOS), restores text spaced out letter by letter, removes Hanja in parentheses, converts full-width to half-width
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
-- **Other languages** — paragraphs in Chinese, Japanese and Latin, Cyrillic or Greek-script languages are split into sentences by their own rules (CJK `。！？` without spaces, abbreviations, `« »` `„ “` quotes and dash dialogue), plus Arabic, Hindi and other sentence marks; the language is judged per paragraph, so Korean results are unaffected
+- **Multilingual** — the script of each paragraph is detected first, then the matching rules are applied: Chinese and Japanese sentences without spaces (`。！？`), abbreviations in English and European languages (`Mr.`, `p. m.`, `Np.`, `т.е.`), quotes such as `« »`, `„ “`, `»…«` and dash dialogue (`— Да! — сказал он.`), plus Greek `;`, Arabic `؟`, Hindi `।` and Burmese `။`; Thai line breaks are kept. Mixed-language files work, and Korean results are unaffected
 - **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
 - **Reading mode** — click or Space to turn pages, remembers your reading position, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
