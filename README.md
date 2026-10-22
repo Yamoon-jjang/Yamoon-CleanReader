@@ -4,8 +4,10 @@
 
 **정리하고, 바로 읽는다.**
 
-망가진 TXT·EPUB을 깨끗한 문단으로 되살리는 **정리기**와, 그 글을 책처럼 편하게 읽는 **리더기**를<br>
+망가진 TXT·EPUB을 깨끗한 문단으로 되살리는 **정리기**와, 그 글을 책처럼 편하게 읽는 **리더기(TXT 뷰어 · 소설 뷰어)** 를<br>
 하나의 프로그램에 담은 Windows 앱
+
+<sub>A lightweight Windows TXT cleaner and ebook reader that restores broken line breaks into proper paragraphs — built for Korean novels and web text. · <a href="#english">English summary</a></sub>
 
 [![Release](https://img.shields.io/github/v/release/Yamoon-jjang/Yamoon-CleanReader?label=%EB%B0%B0%ED%8F%AC%EB%B3%B8&color=2f5aa8)](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest)
 ![Platform](https://img.shields.io/badge/Windows-7%20%7C%208%20%7C%2010%20%7C%2011-0078D6)
@@ -25,8 +27,8 @@
 <td width="50%" align="center"><b>읽기 모드</b></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/01-fixed-width.png" alt="정리 모드"></td>
-<td><img src="docs/screenshots/04-reading-sepia.png" alt="읽기 모드"></td>
+<td><img src="docs/screenshots/01-fixed-width.png" alt="정리 모드 — 고정폭으로 잘린 TXT 문단 복원"></td>
+<td><img src="docs/screenshots/04-reading-sepia.png" alt="읽기 모드 — 세피아 배색 TXT 소설 뷰어"></td>
 </tr>
 <tr>
 <td><sub>옛 모바일 txt, 한 줄로 뭉친 글, 웹에서 긁어 온 찌꺼기투성이 글을 문장 · 대사 · 장면 단위로 분석해 원래의 문단으로 되살립니다. (예: 40칸 고정폭으로 잘린 옛 모바일 글 복원)</sub></td>
@@ -58,7 +60,7 @@
 
 ### 한국어 특수 문제를 한 번에
 
-<img src="docs/screenshots/02-korean-cleanup.png" alt="한국어 특수 문제 정리 화면" width="100%">
+<img src="docs/screenshots/02-korean-cleanup.png" alt="한국어 TXT 정리 — 분리된 자모 결합, 반복 머리글 제거" width="100%">
 
 <sub>맥에서 만든 파일의 <b>분리된 자모 190자 결합</b>, 페이지마다 반복되는 머리글 · 광고 · 주소 31줄 제거, 괄호 속 한자 삭제, 전각 → 반각 변환을 한 번에 — 상태줄에 고친 내용이 그대로 표시됩니다</sub>
 
@@ -134,6 +136,30 @@
 ## 소스에서 빌드하기
 
 명령은 [BUILD.txt](BUILD.txt)에 있습니다. 정보 창의 **빌드** 줄에 빌드 시각과 커밋이 표시되어, 같은 버전이라도 어느 빌드인지 구분할 수 있습니다.
+
+---
+
+<a id="english"></a>
+
+## English
+
+**Yamoon CleanReader** is a lightweight Windows app that combines a **TXT cleaner** and an **ebook reader** in one window. It repairs broken line breaks in TXT and EPUB files and restores proper paragraphs, then lets you read the result like a book. It is designed mainly for **Korean novels and web text**, and the interface is in Korean.
+
+Instead of blindly removing line breaks, it first analyzes how the whole file breaks its lines, then cleans it accordingly.
+
+- **Paragraph restoration** — detects blank-line, hard-wrapped, fixed-width (old mobile TXT), single-line and list-style text; keeps multi-line dialogue together and leaves poems, lyrics and letters intact
+- **Chapter detection** — finds chapter titles even when buried inside a single long line, and builds a table of contents
+- **Korean-specific fixes** — joins decomposed jamo (NFD text from macOS), restores text spaced out letter by letter, removes Hanja in parentheses, converts full-width to half-width
+- **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
+- **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1252
+- **Reading mode** — click or Space to turn pages, remembers your reading position, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
+- **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
+
+Native C++17 / Win32, a single ~1.5 MB exe — no installation, no runtime dependencies, no network access. Windows 7 or later (64-bit). Download from [Releases](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest).
+
+Companion app: **[Yamoon Novel Translator](https://github.com/Yamoon-jjang/Yamoon-Novel-Translator)** translates Chinese, Japanese and English novels into Korean.
+
+---
 
 ## 라이선스
 
