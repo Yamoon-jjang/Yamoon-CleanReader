@@ -91,6 +91,7 @@
 - 회차 · 장 제목 인식 — `제1화`, `[2화]`, `【3장】`, `<외전>`, `《프롤로그》` — 수량 표현(`2장 분량의`)과는 구별
 - 꾸밈 제목(`──────` / 제목 / `──────`), 장면 구분선, 가운데 정렬 머리말 보존
 - 글 끝 덧붙임(`PS:`, `작가의 말`, `후기:`) 앞에서 문단 나누기
+- 외국어 문단도 그 언어에 맞게 문장 나누기 — 중국어 · 일본어(띄어쓰기 없는 `。！？`), 영어(약어 · 이니셜 구별), 러시아어 · 프랑스어(`« »` 대사), 독일어(`„ “`) — 언어는 문단마다 판단하므로 한국어 글의 정리 결과는 그대로
 
 **다듬기**
 - 연속 공백 · 전각 공백 · 탭 · 한글 채움 문자 정리, 문장부호 앞 공백 제거, 빠진 공백 넣기
@@ -151,6 +152,7 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Chapter detection** — finds chapter titles even when buried inside a single long line, and builds a table of contents
 - **Korean-specific fixes** — joins decomposed jamo (NFD text from macOS), restores text spaced out letter by letter, removes Hanja in parentheses, converts full-width to half-width
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
+- **Other languages** — paragraphs in Chinese, Japanese, English, Russian, French and German are split into sentences by their own rules (CJK `。！？` without spaces, English abbreviations, `« »` and `„ “` quotes); the language is judged per paragraph, so Korean results are unaffected
 - **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1252
 - **Reading mode** — click or Space to turn pages, remembers your reading position, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
