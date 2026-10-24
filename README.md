@@ -130,11 +130,13 @@
 - 최대 100MB, 여러 파일 한꺼번에 변환, 원본은 그대로 두고 `_정리.txt`로 따로 저장
 - 원본 칸에서 클릭한 곳이 결과 칸의 같은 위치로 따라가는 연동 보기
 - 찾기 · 바꾸기 — 여러 줄 칸으로 빈 줄 개수까지 바꾸기
+- 최근 파일 20개 — 몇 %까지 읽었는지 함께 표시
 
 **읽기**
 - 글꼴 · 크기(9~28) · 굵게 · 줄 간격(좁게~아주 넓게) · 여백, 배색 8가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 …) + 사용자 지정 색
 - 클릭 · Space 쪽 넘김, 읽던 위치 기억, 목차, 파일별 책갈피, 전체 화면, Ctrl+휠 글자 크기
 - 밝은 · 어두운 테마(시스템 설정 따라가기 포함), 고해상도(DPI) 화면 대응
+- 창 위치 · 크기 기억 — 다시 켜면 마지막에 놓아둔 자리에 그대로 열림 (보조 모니터 포함)
 
 ## 기술 사양
 
@@ -156,6 +158,8 @@
 
 자세한 사용법은 함께 들어 있는 `README.txt`, 바로 시험해 볼 수 있는 예제는 `samples` 폴더에 있습니다.
 
+> **새 버전으로 바꿀 때** — 설정(창 위치 · 크기, 옵션, 보기 설정, 최근 파일, 읽던 곳)은 exe 옆 `YamoonCleanReader.ini`에 저장됩니다. 새 버전을 다른 폴더에 풀었다면 예전 폴더의 이 파일을 새 폴더로 복사해 두세요. 예전 폴더를 그냥 지우면 설정이 처음 상태로 돌아갑니다.
+
 ## 소스에서 빌드하기
 
 명령은 [BUILD.txt](BUILD.txt)에 있습니다. 정보 창의 **빌드** 줄에 빌드 시각과 커밋이 표시되어, 같은 버전이라도 어느 빌드인지 구분할 수 있습니다.
@@ -176,7 +180,7 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
 - **Multilingual** — the script of each paragraph is detected first, then the matching rules are applied: Chinese and Japanese sentences without spaces (`。！？`), abbreviations in English and European languages (`Mr.`, `p. m.`, `Np.`, `т.е.`), quotes such as `« »`, `„ “`, `»…«` and dash dialogue (`— Да! — сказал он.`), plus Greek `;`, Arabic `؟`, Hindi `।` and Burmese `။`; Thai line breaks are kept. Mixed-language files work, and Korean results are unaffected
 - **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
-- **Reading mode** — click or Space to turn pages, remembers your reading position, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
+- **Reading mode** — click or Space to turn pages, remembers your reading position and the window position and size, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
 
 Native C++17 / Win32, a single ~1.5 MB exe — no installation, no runtime dependencies, no network access. Windows 7 or later (64-bit). Download from [Releases](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest).

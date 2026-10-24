@@ -83,8 +83,8 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4";
-static const wchar_t* kDate = L"2026년 10월 19일";
+static const wchar_t* kVersion = L"2.4.1";
+static const wchar_t* kDate = L"2026년 10월 25일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
 #ifndef BUILD_UTC
@@ -2010,10 +2010,11 @@ static bool ConfirmDiscardEdits() {
                        L"야문 클린리더", MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
 
-// 최근 파일 (ini [recent] r0..r9)
+// 최근 파일 (ini [recent] r0..r19)
+static const int kMaxRecent = 20;
 static std::vector<wstring> LoadRecent() {
     std::vector<wstring> v;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < kMaxRecent; ++i) {
         wchar_t b[MAX_PATH * 2] = {};
         GetPrivateProfileStringW(L"recent", (L"r" + std::to_wstring(i)).c_str(), L"", b, MAX_PATH * 2, g_ini.c_str());
         if (b[0]) v.push_back(b);
@@ -2022,7 +2023,7 @@ static std::vector<wstring> LoadRecent() {
 }
 static void SaveRecent(const std::vector<wstring>& v) {
     WritePrivateProfileStringW(L"recent", nullptr, nullptr, g_ini.c_str());
-    for (size_t i = 0; i < v.size() && i < 10; ++i)
+    for (size_t i = 0; i < v.size() && i < (size_t)kMaxRecent; ++i)
         WritePrivateProfileStringW(L"recent", (L"r" + std::to_wstring(i)).c_str(), v[i].c_str(), g_ini.c_str());
 }
 static void AddRecent(const wstring& path) {
@@ -2030,7 +2031,7 @@ static void AddRecent(const wstring& path) {
     std::vector<wstring> v = LoadRecent(), o;
     o.push_back(path);
     for (auto& x : v) if (lstrcmpiW(x.c_str(), path.c_str()) != 0) o.push_back(x);
-    if (o.size() > 10) o.resize(10);
+    if (o.size() > (size_t)kMaxRecent) o.resize(kMaxRecent);
     SaveRecent(o);
 }
 static bool LoadFile(const wstring& path) {
@@ -3382,7 +3383,7 @@ static void ShowRecentMenu(HWND anchor) {
         wchar_t buf[64] = {};
         GetPrivateProfileStringW(L"pos", PosKey(v[k]).c_str(), L"", buf, 64, g_ini.c_str());
         long a = 0, b = 0;
-        wstring w = std::to_wstring(k + 1 == 10 ? 0 : k + 1) + L"  " + name;
+        wstring w = (v.size() >= 10 && k + 1 < 10 ? L"  " : L"") + std::to_wstring(k + 1) + L"  " + name;  // 10번부터 두 자리 — 한 자리 번호 앞에 공백 두 칸(숫자 한 자리 폭)으로 줄 맞춤
         if (swscanf(buf, L"%ld,%ld", &a, &b) == 2 && b > 0) w += L"\t" + std::to_wstring((int)(100.0 * a / b + 0.5)) + L"%";
         AppendMenuW(m, MF_STRING | (GetFileAttributesW(v[k].c_str()) == INVALID_FILE_ATTRIBUTES ? MF_GRAYED : 0), ID_RECENT_BASE + (UINT)k, w.c_str());
     }
@@ -4913,6 +4914,44 @@ static void HandleDrop(HDROP hd) {
     else if (files.size() > 1) OpenBatchWindow(files);
 }
 
+// ini 정수 (음수도 읽음 — GetPrivateProfileInt는 음수를 0으로 돌려줌). 값이 없으면 false
+static bool IniGetSigned(const wchar_t* k, int& out) {
+    wchar_t b[32] = {};
+    GetPrivateProfileStringW(L"opt", k, L"", b, 32, g_ini.c_str());
+    if (!b[0]) return false;
+    wchar_t* end = nullptr;
+    long v = wcstol(b, &end, 10);
+    if (end == b) return false;
+    out = (int)v;
+    return true;
+}
+// 지난번 닫을 때의 창 위치로 (창 보이기 전에 호출). 놓아둔 자리 그대로 열되,
+// 제목 줄이 어느 화면에도 보이지 않으면(모니터를 뺐거나 해상도가 바뀌었을 때) 기본 위치에 엶
+static void RestoreWindowPos(HWND hwnd) {
+    int x = 0, y = 0;
+    if (g_ini.empty() || !IniGetSigned(L"x", x) || !IniGetSigned(L"y", y)) return;
+    WINDOWPLACEMENT wp = {sizeof(wp)};
+    if (!GetWindowPlacement(hwnd, &wp)) return;
+    int w = wp.rcNormalPosition.right - wp.rcNormalPosition.left, h = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
+    // rcNormalPosition은 작업 영역 좌표 — 화면 좌표로 바꿔 모니터와 비교 (주 모니터 작업표시줄이 위·왼쪽일 때만 차이)
+    int ox = 0, oy = 0;
+    MONITORINFO pmi = {sizeof(pmi)};
+    POINT zero = {0, 0};
+    if (GetMonitorInfoW(MonitorFromPoint(zero, MONITOR_DEFAULTTOPRIMARY), &pmi)) { ox = pmi.rcWork.left - pmi.rcMonitor.left; oy = pmi.rcWork.top - pmi.rcMonitor.top; }
+    int sx = x + ox, sy = y + oy;
+    // 제목 줄(위쪽 가운데 부분)이 어느 모니터 작업 영역에 걸쳐 있어야 창을 잡아 옮길 수 있음
+    RECT probe = {sx + w / 4, sy, sx + w - w / 4, sy + 24};
+    HMONITOR mon = MonitorFromRect(&probe, MONITOR_DEFAULTTONULL);
+    if (!mon) return;
+    MONITORINFO mi = {sizeof(mi)};
+    RECT inter;
+    if (!GetMonitorInfoW(mon, &mi) || !IntersectRect(&inter, &probe, &mi.rcWork) || inter.right - inter.left < 40 || sy < mi.rcWork.top) return;
+    wp.rcNormalPosition = {x, y, x + w, y + h};
+    wp.showCmd = SW_HIDE;  // 위치만 정하고 보이기는 뒤의 ShowWindow가 함 (최대화 기억도 그대로)
+    wp.flags = 0;
+    SetWindowPlacement(hwnd, &wp);
+}
+
 static void SaveSettings() {
     IniSet(L"blank", CbSel(g_cbBlank));
     IniSet(L"join", CbSel(g_cbJoin));
@@ -4938,6 +4977,8 @@ static void SaveSettings() {
         IniSet(L"maximized", wp.showCmd == SW_SHOWMAXIMIZED);
         IniSet(L"w", MulDiv(wp.rcNormalPosition.right - wp.rcNormalPosition.left, 96, g_dpi));
         IniSet(L"h", MulDiv(wp.rcNormalPosition.bottom - wp.rcNormalPosition.top, 96, g_dpi));
+        IniSet(L"x", wp.rcNormalPosition.left);  // 창 위치 (작업 영역 좌표, 픽셀 — 왼쪽 보조 모니터는 음수)
+        IniSet(L"y", wp.rcNormalPosition.top);
     }
 }
 
@@ -6558,6 +6599,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
     }
     HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, L"TextTidyWnd", kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                                 CW_USEDEFAULT, CW_USEDEFAULT, w, hh, nullptr, nullptr, hi, nullptr);
+    RestoreWindowPos(hwnd);
     ShowWindow(hwnd, IniGet(L"maximized", 0) ? SW_SHOWMAXIMIZED : nShow);
     UpdateWindow(hwnd);
     if (g_reading) SetTimer(hwnd, TIMER_READ, 300, nullptr);
