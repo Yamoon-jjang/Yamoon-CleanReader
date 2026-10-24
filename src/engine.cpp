@@ -175,13 +175,17 @@ bool isHeading(const S& t, int w) {
              c == '-' || c == '+' || c == '*' || c == 0x25C6 || c == 0x25C7 || c == 0x25A0 || c == 0x25A1 || c == 0x25CF ||
              c == 0x25CB || c == 0x2605 || c == 0x2606 || c == 0x203B || c == 0x25B6 || c == 0x25B7 || c == 0x25BA)
         pat = true;
-    else if (startsWithCI(t, "prologue") || startsWithCI(t, "epilogue") || startsWithCI(t, "chapter") ||
-             startsWithCI(t, "episode") || startsWithCI(t, "part") || startsWithCI(t, "ep.") || startsWithCI(t, "ch."))
-        pat = true;
+    else if (startsWithCI(t, "ep.") || startsWithCI(t, "ch.")) pat = true;
     else {
+        // 영어 낱말은 뒤에 글자가 더 붙지 않아야 제목: "Part 2" "Chapter IV" (O)  "party." "parting" "chapters" (X)
+        static const char* ew[] = {"prologue", "epilogue", "chapter", "episode", "part", nullptr};
+        for (int i = 0; ew[i]; ++i) {
+            size_t len = 0; while (ew[i][len]) ++len;
+            if (startsWithCI(t, ew[i]) && (t.size() == len || !isLetterDigit(t[len]) || isDigit(t[len]))) { pat = true; break; }
+        }
         static const char32_t* kw[] = {U"프롤로그", U"에필로그", U"외전", U"후기", U"작가", U"서장", U"종장",
                                        U"막간", U"번외", U"특별편", U"공지", U"챕터", U"목차", U"序", nullptr};
-        for (int i = 0; kw[i]; ++i) if (startsWith(t, 0, kw[i])) { pat = true; break; }
+        for (int i = 0; !pat && kw[i]; ++i) if (startsWith(t, 0, kw[i])) { pat = true; break; }
     }
     if (!pat) return false;
     return endKind(t) != 2 || w <= 10;
@@ -288,6 +292,29 @@ void encloseRoles(const S& p0, int startQ, std::vector<char>& role, int& endQ) {
             if (p[i] != '\'') continue;
             bool apos = i > 0 && i + 1 < n && isAsciiAlpha(p[i - 1]) && isAsciiAlpha(p[i + 1]);
             if (!apos) sq.push_back(i);
+        }
+        // 영문 복수 소유격·줄임말("convicts' cells", "Holmes' attention", "'tis", "'em")을 빼고 봐서 짝이 맞으면 그것을 씀
+        if (!sq.empty()) {
+            auto elision = [&](size_t i) {
+                static const char32_t* ew[] = {U"tis ", U"twas ", U"em ", U"em,", U"em.", U"cause ", U"til ", U"round ", nullptr};
+                for (int k = 0; ew[k]; ++k) {
+                    S w = ew[k]; bool ok = true;
+                    for (size_t q = 0; q < w.size(); ++q) {
+                        if (i + 1 + q >= n) { ok = false; break; }
+                        C c = p[i + 1 + q]; if (c >= 'A' && c <= 'Z') c += 32;
+                        if (c != w[q]) { ok = false; break; }
+                    }
+                    if (ok && (i == 0 || !isAsciiAlpha(p[i - 1]))) return true;
+                }
+                return false;
+            };
+            std::vector<size_t> s2;
+            for (size_t i : sq) {
+                bool poss = i > 0 && (p[i - 1] == 's' || p[i - 1] == 'S') && (i + 1 >= n || !isAsciiAlpha(p[i + 1])) &&
+                            i > 1 && isAsciiAlpha(p[i - 2]);
+                if (!poss && !elision(i)) s2.push_back(i);
+            }
+            if (s2.size() % 2 == 0) sq.swap(s2);
         }
         if (sq.size() % 2 == 0)
             for (size_t k = 0; k + 1 < sq.size(); k += 2) { role[sq[k]] = 1; role[sq[k + 1]] = 2; }
@@ -1674,6 +1701,23 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     int N = (int)ws.size();
     bool cut = false, ragged = false;
     int W = 0;
+    int CW = 0;  // 글자 수로 자른 글의 한 줄 글자 수 (0 = 폭으로 자른 글)
+    auto ccOf = [](const Line& L) {  // 줄의 글자 수 (보이지 않는 글자는 빼고, 앞뒤 공백 포함)
+        int c = 0;
+        for (C x : L.t) if (!isInvisible(x)) c++;
+        return c + (L.lead > 0 ? L.lead : 0) + (L.trail ? 1 : 0);
+    };
+    auto atLimit = [&](const Line& L, int slack) { return CW ? ccOf(L) >= CW - slack : L.rw >= W - slack; };
+    // 한글·한자·가나가 (거의) 없는 글(영어·유럽어)은 낱말 단위로 넘기므로 줄이 적어도 글자 단위로 보지 않음
+    bool westText = false;
+    {
+        size_t cjk = 0, lat = 0;
+        for (int i = 0; i + 1 < n; ++i) {
+            if (brk[i + 1]) continue;
+            for (C c : lines[i].t) { if (isHangul(c) || isKanaHan(c)) cjk++; else if (isUpperWest(c) || isLowerWest(c)) lat++; }
+        }
+        westText = lat >= 100 && cjk * 50 < lat;
+    }
     if (N >= 8) {
         std::map<int, int> hist;
         for (int w : ws) if (w >= 16) hist[w]++;
@@ -1682,7 +1726,19 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             int s = kv.second + (hist.count(kv.first - 1) ? hist[kv.first - 1] : 0);
             if (s > best || (s == best && kv.first > bestM)) { best = s; bestM = kv.first; }
         }
-        if (bestM >= 16 && best >= N * 0.35) { cut = true; W = bestM; }
+        if (bestM >= 16 && best >= N * 0.35) {
+            cut = true; W = bestM;
+            // 글자 단위로 자른 글(옛 모바일 txt)은 꽉 찬 줄이 거의 모두 W 또는 W-1에서 끝나지만,
+            // 낱말 단위로 넘긴 글(영문 소설 등)은 W 근처에 넓게 퍼짐. 넓게 퍼졌으면 낱말 단위로 봄
+            // (글자 단위로 보면 줄을 이을 때 띄어쓰기 없이 붙여 낱말이 붙어 버림: "the" + "foreman" -> "theforeman")
+            int big = 0, tightN = 0;
+            for (int w : ws) if (w * 4 >= W * 3) { big++; if (w == W || w == W - 1) tightN++; }
+            if ((big >= 10 && tightN * 4 < big * 3) || westText) {
+                cut = false; ragged = true;
+                std::vector<int> sw = ws; std::sort(sw.begin(), sw.end());
+                W = std::max(W, sw[(size_t)((sw.size() - 1) * 0.95)]);  // 낱말 단위 글의 한계 폭은 가장 흔한 폭보다 조금 넓음
+            }
+        }
         else {
             std::vector<int> sw = ws; std::sort(sw.begin(), sw.end());
             int W95 = sw[(size_t)((sw.size() - 1) * 0.95)];
@@ -1692,22 +1748,43 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 if (cnt >= N * 0.55) { ragged = true; W = W95; }
             }
         }
+        // 글자 수로 자른 글: 한글은 2칸, 공백·숫자·영문은 1칸이라 폭은 퍼지지만 글자 수는 거의 모든 줄이 같음.
+        // 이런 글은 낱말 중간에서도 잘리므로 띄어쓰기 없이 이어야 함 ("수" / "진은" -> "수진은")
+        if (!cut && !westText) {
+            std::map<int, int> hc;
+            for (int i = 0; i + 1 < n; ++i) if (!brk[i + 1]) { int c = ccOf(lines[i]); if (c >= 8) hc[c]++; }
+            int bs = 0, bc = 0;
+            for (auto& kv : hc) {
+                int s = kv.second + (hc.count(kv.first - 1) ? hc[kv.first - 1] : 0);
+                if (s > bs || (s == bs && kv.first > bc)) { bs = s; bc = kv.first; }
+            }
+            if (bc >= 10 && bs >= N * 0.35) {
+                int big = 0, tightN = 0;
+                for (int i = 0; i + 1 < n; ++i) {
+                    if (brk[i + 1]) continue;
+                    int c = ccOf(lines[i]);
+                    if (c * 4 >= bc * 3) { big++; if (c == bc || c == bc - 1) tightN++; }
+                }
+                if (big >= 10 && tightN * 4 >= big * 3) { cut = true; ragged = false; CW = bc; W = 0; }
+            }
+        }
     }
     // 폭이 같은 줄이 많아도 그 줄들이 대부분 문장 끝(~다.)에서 끝나면 잘린 글이 아니라 이미 정리된 글
     if (cut || ragged) {
         int full = 0, ended = 0;
         for (int i = 0; i + 1 < n; ++i) {
-            if (brk[i + 1] || lines[i].rw < W - 1) continue;
+            if (brk[i + 1] || !atLimit(lines[i], 1)) continue;
             full++;
             if (endKind(lines[i].t) == 2) ended++;
         }
-        if (full >= 4 && ended * 10 >= full * 6) { cut = ragged = false; W = 0; }
+        if (full >= 4 && ended * 10 >= full * 6) { cut = ragged = false; W = 0; CW = 0; }
     }
-    if (listLike) { cut = ragged = false; W = 0; }
+    if (listLike) { cut = ragged = false; W = 0; CW = 0; }
     bool wrap = cut || ragged;
     // a 줄이 "꽉 찬" 줄인가: 다음 줄 첫 글자/첫 단어가 a 뒤에 들어갈 자리가 없었으면 강제로 넘어간 것
     auto isFull = [&](const Line& a, const Line* b) {
         if (cut) {
+            if (CW) return ccOf(a) >= CW - 1;
             if (a.rw >= W - 1) return true;
             if (b && !b->t.empty()) return a.rw + cw(b->t[0]) + (b->lead > 0 ? 1 : 0) > W;
             return false;
@@ -1725,7 +1802,14 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     };
 
     // 고정폭으로 꽉 찬 줄은 제목이 아니라 잘린 본문
-    if (wrap) for (int i = 0; i + 1 < n; ++i) if (lines[i].head && !brk[i + 1] && lines[i].rw >= W - 2) lines[i].head = false;
+    if (wrap) for (int i = 0; i + 1 < n; ++i) if (lines[i].head && !brk[i + 1] && atLimit(lines[i], 2)) lines[i].head = false;
+    // 꽉 찬 줄에서 문장이 끝나지 않고 넘어온 줄도 제목이 아니라 문단의 뒷부분
+    // ("…like you the best of the" / "party.\"", "…for the observer" / "--excellent for…", "…in the year" / "1887 I …")
+    if (wrap)
+        for (int i = 1; i < n; ++i) {
+            const Line& a = lines[i - 1];
+            if (lines[i].head && !brk[i] && !a.head && !a.sym && endKind(a.t) == 0 && isFull(a, &lines[i])) lines[i].head = false;
+        }
     // 첫 줄이 짧고 끝나지 않은 글이면 제목으로 봄 (단, 고정폭으로 꽉 찬 줄은 본문이 잘린 것)
     if (n > 1 && !lines[0].sym && !lines[0].head && lines[0].w <= 40 && endKind(lines[0].t) == 0 &&
         !isOpenQuote(firstVis(lines[0].t)) && lastVis(lines[0].t) != ',' && lastVis(lines[0].t) != 0xFF0C &&  // 대사 첫 줄·쉼표로 끝난 줄은 제목 아님
@@ -1817,7 +1901,19 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (x == 0x201C || x == 0x2018 || x == 0x300C || x == 0x300E || x == '(' || x == '[') return true;
         // 글 일부만 "줄마다 빈 줄"로 끊긴 구간: 문장이 끝나지 않은 줄은 이음
         if (a.dz && b.gap == 1) return endKind(a.t) == 0;
-        if (wrap) return isFull(a, &b);
+        if (wrap) {
+            if (isFull(a, &b)) return true;
+            // 낱말 단위로 넘긴 글은 줄 폭이 고르지 않아(손으로 다듬은 줄, 최대 폭보다 조금 일찍 넘긴 줄) 꽉 찬 줄 검사만으로는
+            // 놓치는 곳이 많음: 문장이 끝나지 않은 줄이 거의 꽉 찼거나, 다음 줄이 영문 소문자로 이어지면 이음
+            // ("…and sat about" / "ten minutes with him…"). 짧은 줄(시·주소 등)은 그대로 둠
+            if (ragged && endKind(a.t) == 0 && !a.head && !b.head) {
+                int fw = 0;
+                for (C c : b.t) { if (c == ' ') break; fw += cw(c); }
+                if (a.rw + 1 + fw > W - std::max(2, W / 12)) return true;
+                if (isLowerWest(y) && a.rw * 2 >= W && (isLowerWest(x) || x == ';' || x == ':' || x == '-' || isDashC(x))) return true;
+            }
+            return false;
+        }
         // 빈 줄로 문단을 나눈 글에서 문단 안의 줄바꿈은 작가가 일부러 한 것 (시·노래 가사·편지 등):
         // 조사·연결 어미로 끝난 줄(위에서 처리)만 잇고 나머지는 그대로 둠
         if (blockStyle) {
@@ -1842,7 +1938,8 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         C x = lastVis(a.t), y = firstVis(b.t);
         if (x == ',' || x == 0xFF0C || x == 0x3001) return U" ";
         if (y == ',' || y == '.' || y == '!' || y == '?' || y == ')' || y == ']' || y == 0x201D || y == 0x2019 ||
-            y == 0x300D || y == 0x300F || y == 0xFF0C || y == 0x3001) return U"";
+            y == 0x300D || y == 0x300F || y == 0xFF0C || y == 0x3001 ||
+            y == 0x3002 || y == 0xFF01 || y == 0xFF1F || y == 0xFF09 || y == 0x3011) return U"";  // 。！？）】
         if ((x == 0x201C || x == 0xAB) && endKind(a.t) == 2) return U" ";  // 닫는 „…“ »…«
         if (x == 0x201C || x == 0x2018 || x == 0x300C || x == 0x300E || x == '(' || x == '[') return U"";
         if (isHangulSyl(x) && isHangulSyl(y) && endKind(a.t) == 0) {
@@ -1993,6 +2090,13 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         for (size_t i = 0; i < paras.size(); ++i) {
             auto& p = paras[i];
             if (p.kind != 0) { carry = 0; continue; }
+            // 영문 소설 관례: 대사가 여러 문단에 걸치면 앞 문단은 따옴표를 닫지 않고 다음 문단을 다시 " 로 엶.
+            // 이때 다음 문단은 새로 여는 따옴표로 시작하므로 앞 문단과 합치지 않음 (합치면 따옴표 짝이 거꾸로 맞음)
+            if (carry == 1 && firstVis(vis[i]) == '"') {
+                bool west = true;
+                for (C c : vis[i]) if (isHangul(c) || isKanaHan(c)) { west = false; break; }
+                if (west) carry = 0;
+            }
             if (carry) {
                 // 뒤에서 대사가 닫히는 문단 찾기 (그 사이 문단에는 따옴표가 없어야 함)
                 size_t k = i, chars = 0;
@@ -2212,7 +2316,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
 
     R.outParas = (int)outP.size();
     R.doubleSpaced = dbl && opt.blankMode == 0;
-    R.wrapWidth = wrap ? W : 0;
+    R.wrapWidth = wrap ? (CW ? CW : W) : 0;
     R.wrapCut = cut;
     R.indentMarks = indentMarks;
     if (rep) *rep = R;
