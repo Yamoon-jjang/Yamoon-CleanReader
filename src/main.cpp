@@ -1940,6 +1940,13 @@ static void FinishReprocess(ProcJob& j) {
     MEAS_MARK(target > 0 ? L"지난번 읽던 곳으로 이동" : L"맨 처음으로 (이동 없음)");
     if (MEAS_ON() && target > 0) MEAS_NOTE(L"읽던 곳 복원: 글의 약 " + std::to_wstring(newLen > 0 ? (int)((double)target * 100 / newLen) : 0) + L"% 지점");
     InvalidateRect(g_hwnd, nullptr, FALSE);
+    // 읽기 모드: 글을 연 뒤 바로 클릭·스페이스로 쪽을 넘길 수 있게 결과 칸에 입력을 줌
+    // (열기 단추에 입력이 남아 있으면 스페이스가 열기 창을 띄우고, 클릭이 먹히지 않음)
+    if (g_reading && IsWindowEnabled(g_hwnd)) {
+        HWND cap = GetCapture();
+        if (cap && cap != g_dst) ReleaseCapture();
+        if (GetFocus() != g_dst) SetFocus(g_dst);
+    }
     if (MEAS_ON()) PostMessageW(g_hwnd, WM_APP_MEAS, 0, 0);
 }
 
@@ -2849,12 +2856,15 @@ static int ReadPercent() {
 }
 static void SetReading(bool on);
 // 결과 창: 읽기 모드에서 위쪽·아래쪽 클릭으로 쪽 넘김
-static bool InFlipZone(HWND h, int y, int* dir) {
+// 위쪽·왼쪽 = 앞 쪽, 아래쪽·오른쪽 = 다음 쪽 (가운데만 넘기지 않음)
+static bool InFlipZone(HWND h, int x, int y, int* dir) {
     RECT r; GetClientRect(h, &r);
-    int hh = r.bottom - r.top;
-    if (hh <= 0) return false;
+    int hh = r.bottom - r.top, ww = r.right - r.left;
+    if (hh <= 0 || ww <= 0) return false;
     if (y < hh / 3) { *dir = -1; return true; }
     if (y > hh * 2 / 3) { *dir = 1; return true; }
+    if (x < ww / 4) { *dir = -1; return true; }
+    if (x > ww * 3 / 4) { *dir = 1; return true; }
     return false;
 }
 static void SetFullscreen(bool on);
@@ -2864,18 +2874,21 @@ static LRESULT CALLBACK DstProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR
         int dir = 0;
         switch (msg) {
         case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
-            if (InFlipZone(h, (short)HIWORD(lp), &dir)) { SetFocus(h); PageFlip(dir); return 0; }
+            if (InFlipZone(h, (short)LOWORD(lp), (short)HIWORD(lp), &dir)) { SetFocus(h); PageFlip(dir); return 0; }
             break;
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT) {
                 POINT p; GetCursorPos(&p); ScreenToClient(h, &p);
-                if (InFlipZone(h, p.y, &dir)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
+                if (InFlipZone(h, p.x, p.y, &dir)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
             }
             break;
         case WM_KEYDOWN:
             if (wp == VK_SPACE) { PageFlip(GetKeyState(VK_SHIFT) < 0 ? -1 : 1); return 0; }
             if (wp == VK_NEXT) { PageFlip(1); return 0; }
             if (wp == VK_PRIOR) { PageFlip(-1); return 0; }
+            if ((wp == VK_LEFT || wp == VK_RIGHT) && GetKeyState(VK_SHIFT) >= 0 && GetKeyState(VK_CONTROL) >= 0) {  // ←·→ 키: 앞·다음 쪽
+                PageFlip(wp == VK_RIGHT ? 1 : -1); return 0;
+            }
             if (wp == VK_ESCAPE) {  // 전체 화면 → 읽기 모드 순서로 닫음
                 if (g_fullscreen) SetFullscreen(false);
                 else SetReading(false);
