@@ -75,6 +75,8 @@ enum {
 
 static HINSTANCE g_hInst;
 static HWND g_hwnd, g_src, g_dst;
+// Wheel delta remainders are kept separately for each editor.
+static int g_wheelRemainder[2] = {0,0};
 static HWND g_btnOpen, g_btnSave, g_btnSaveAs, g_btnBatch, g_btnTheme, g_btnRecent;
 static int g_themeMode = 0;  // 0 Windows 설정 따르기, 1 밝게, 2 어둡게
 namespace col { extern COLORREF editText, editBg; }
@@ -2683,7 +2685,44 @@ static HWND MkCombo(int id, std::initializer_list<const wchar_t*> items, int sel
 // 글 칸에 파일을 놓으면 (읽기 모드처럼 고칠 수 없는 칸이어도) 열기와 똑같이 처리
 // 칸이 새로 만들어질 수 있으므로 바로 열지 않고 메인 창에 넘김
 static bool RpUndoAll();
+// Tested B mode: Windows wheel settings + immediate RichEdit scrolling (no delayed inertia).
+static bool HandleRichEditWheel(HWND h, WPARAM wp) {
+    if (GET_KEYSTATE_WPARAM(wp) & (MK_CONTROL | MK_SHIFT)) return false;
+    const int delta = GET_WHEEL_DELTA_WPARAM(wp);
+    int& remainder = g_wheelRemainder[h == g_src ? 0 : 1];
+    const int total = remainder + delta;
+    const int ticks = total / WHEEL_DELTA;
+    remainder = total % WHEEL_DELTA; // high-resolution wheel partial deltas
+    if (!ticks) return true;
+    UINT configuredLines = 3;
+    if (!SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &configuredLines, 0))
+        configuredLines = 3;
+    if (configuredLines == 0) return true;
+    if (configuredLines == WHEEL_PAGESCROLL) {
+        WPARAM cmd = ticks > 0 ? SB_PAGEUP : SB_PAGEDOWN;
+        for (int i = 0; i < std::abs(ticks); ++i) SendMessageW(h, EM_SCROLL, cmd, 0);
+        return true;
+    }
+    RECT rect = {};
+    SendMessageW(h, EM_GETRECT, 0, (LPARAM)&rect);
+    int lineH = 16;
+    HDC dc = GetDC(h);
+    if (dc) {
+        HFONT font = (HFONT)SendMessageW(h, WM_GETFONT, 0, 0);
+        HGDIOBJ prev = font ? SelectObject(dc, font) : nullptr;
+        TEXTMETRICW tm = {};
+        if (GetTextMetricsW(dc, &tm))
+            lineH = std::max(1, (int)(tm.tmHeight + tm.tmExternalLeading));
+        if (prev) SelectObject(dc, prev);
+        ReleaseDC(h, dc);
+    }
+    const int visible = std::max<int>(1, (int)((rect.bottom - rect.top) / lineH) - 1);
+    const int perNotch = std::min((int)configuredLines, visible);
+    SendMessageW(h, EM_LINESCROLL, 0, (LPARAM)(-ticks * perNotch));
+    return true;
+}
 static LRESULT CALLBACK DropProc(HWND h, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_MOUSEWHEEL && HandleRichEditWheel(h, wp)) return 0;
     if (msg == WM_DROPFILES) {
         if (!PostMessageW(g_hwnd, WM_DROPFILES, wp, 0)) DragFinish((HDROP)wp);
         return 0;
