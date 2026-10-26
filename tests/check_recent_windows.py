@@ -45,6 +45,7 @@ cpp = r"""
 #include <vector>
 using std::wstring;
 static wstring g_ini;
+static const int kMaxRecent = 20;
 static bool FileExists(const wstring& p) {
     DWORD a=GetFileAttributesW(p.c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
