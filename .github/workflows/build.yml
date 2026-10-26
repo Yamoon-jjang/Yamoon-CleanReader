@@ -28,6 +28,8 @@ jobs:
       contents: write   # only used by the release step on main
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # historical v2.4.2 source needed for differential simulation
       - name: Install MinGW-w64 (GCC 13, win32 threads)
         run: |
           sudo apt-get update -q
@@ -35,7 +37,9 @@ jobs:
           x86_64-w64-mingw32-g++-win32 --version | head -1
           x86_64-w64-mingw32-g++-win32 --version | head -1 | grep -q ' 13' || { echo 'GCC 13 required'; exit 1; }
       - name: Source regression guards and search index test
-        run: python3 tests/verify_source_contracts.py
+        run: |
+          python3 tests/verify_source_contracts.py
+          python3 tests/compare_search_242_243.py
       - name: Build YamoonCleanReader.exe
         working-directory: src
         run: |
