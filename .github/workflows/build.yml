@@ -21,7 +21,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  search-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Differential regression simulation against v2.4.2
+        run: |
+          python3 tests/verify_source_contracts.py
+          python3 tests/compare_search_242_243.py
+
   build:
+    needs: search-regression
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
