@@ -23,8 +23,8 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.4"' in main
-assert "FILEVERSION 2,4,3,0" in rc and 'VALUE "ProductVersion", "2.4.4"' in rc
+assert 'kVersion = L"2.4.3"' in main
+assert "FILEVERSION 2,4,3,0" in rc and 'VALUE "ProductVersion", "2.4.3"' in rc
 assert "야문 클린리더 v2.4.3" in manual
 assert "v2.4.3" in manual
 assert "u16:" in main and "RecoverDamagedRecentPath" in main
