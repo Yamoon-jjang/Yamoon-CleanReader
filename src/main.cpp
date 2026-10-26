@@ -5650,7 +5650,7 @@ static bool RpFindNext(bool quiet = false) {
     return true;
 }
 static void RpReplaceOne() {
-    if (!RpEditable()) { RpInfo(L"큰 파일은 정리 모드에서 앞부분만 보이므로 바꾸기는 읽기 모드에서 하세요."); return; }
+    if (!RpEditable()) { RpInfo(L"전체 글을 바꾸려면 읽기 모드에서 실행해야 합니다."); return; }
     wstring err;
     if (!RpSearchCached(err)) { RpInfo(err); return; }
     const auto& hits = g_rpCacheHits;
@@ -5677,7 +5677,7 @@ static void RpReplaceOne() {
 }
 static void RpRememberBoth() { if (!g_rpExpanded) { RpRemember(g_rpFind); RpRemember(g_rpRepl); } }
 static void RpReplaceAll() {
-    if (!RpEditable()) { RpInfo(L"큰 파일은 정리 모드에서 앞부분만 보이므로 바꾸기는 읽기 모드에서 하세요."); return; }
+    if (!RpEditable()) { RpInfo(L"전체 글을 바꾸려면 읽기 모드에서 실행해야 합니다."); return; }
     wstring err;
     if (!RpSearchCached(err)) { RpInfo(err); return; }
     const auto& hay = g_rpCacheHay;
@@ -5798,10 +5798,66 @@ static void RpSetExpanded(HWND h, bool on) {
 }
 static void RpUpdateState() {
     if (!g_rpWnd) return;
-    bool ed = RpEditable();
-    for (int id : {ID_RP_REPLACE, ID_RP_ALL}) EnableWindow(GetDlgItem(g_rpWnd, id), ed);
-    if (!ed && !g_text.empty() && g_preview)
-        RpInfo(L"큰 파일은 정리 모드에서 앞부분만 보이므로 바꾸기는 읽기 모드에서 하세요.");
+    // 정리 미리보기에서도 클릭을 허용하고, 실제 실행 전에 전환 동의를 받는다.
+    const bool available = !g_busy && !g_text.empty();
+    for (int id : {ID_RP_REPLACE, ID_RP_ALL})
+        EnableWindow(GetDlgItem(g_rpWnd, id), available);
+    if (available && g_preview && !g_reading && GetWindowTextLengthW(g_rpInfo) == 0)
+        RpInfo(L"큰 파일: 바꾸기 시 읽기 모드 전환을 확인합니다.");
+}
+// 큰 파일 정리 미리보기는 전체 글이 아니므로 확인받은 뒤 전체 글에서 실행한다.
+// 찾기 창을 재생성하지 않으므로 찾기/바꾸기 문자열, 옵션, 확장 입력이 유지된다.
+static void RpRunReplaceAction(bool all) {
+    if (g_preview && !g_reading && !g_busy && !g_text.empty()) {
+        if (RpGet(g_rpFind, g_rpFindX).empty()) {
+            RpInfo(L"찾을 말을 적어 주세요.");
+            return;
+        }
+        const wstring action = all ? L"모두 바꾸기" : L"바꾸기";
+        const wstring prompt =
+            L"정리 모드에서는 큰 파일의 앞부분만 화면에 보여 줍니다.\n\n"
+            L"현재 찾을 말·바꿀 말·검색 옵션을 그대로 유지한 채 읽기 모드로 전환해\n"
+            L"전체 글에서 [" + action + L"] 작업을 실행할까요?\n\n"
+            L"[예] 읽기 모드 전환 후 " + action + L" 실행\n"
+            L"[아니요] 모드·검색창·본문 유지";
+        if (MessageBoxW(g_rpWnd, prompt.c_str(), L"전체 글 바꾸기 · 읽기 모드 전환", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+            return;
+        CHARRANGE oldSel = {};
+        SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&oldSel);
+        KillTimer(g_rpWnd, 7);
+        SetReading(true); // 전체 글 로드 및 검색 캐시 자동 무효화
+        if (!g_reading || !RpEditable()) {
+            RpInfo(L"읽기 모드에서 전체 글을 준비하지 못했습니다. 다시 시도해 주세요.");
+            return;
+        }
+        RpUpdateState();
+        if (all) {
+            RpRememberBoth();
+            RpReplaceAll();
+        } else {
+            wstring err;
+            if (!RpSearchCached(err)) { RpInfo(err); return; }
+            const auto& hits = g_rpCacheHits;
+            if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return; }
+            size_t pick = 0;
+            const size_t from = (size_t)std::max(0L, oldSel.cpMin);
+            for (size_t i = 0; i < hits.size(); ++i)
+                if (hits[i].a >= from) { pick = i; break; }
+            SendMessageW(g_dst, EM_SETSEL, (WPARAM)hits[pick].a, (LPARAM)hits[pick].b);
+            SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
+            RpRememberBoth();
+            RpReplaceOne();
+        }
+        if (IsWindow(g_rpWnd)) SetFocus(g_rpExpanded ? g_rpFindX : g_rpFind);
+        return;
+    }
+    if (!RpEditable()) {
+        RpInfo(g_busy ? L"글을 정리하는 중입니다. 완료 후 다시 시도하세요." : L"먼저 파일을 열거나 글을 붙여넣으세요.");
+        return;
+    }
+    RpRememberBoth();
+    if (all) RpReplaceAll();
+    else RpReplaceOne();
 }
 static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -5902,8 +5958,8 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             HWND b = GetDlgItem(h, id); SetToggle(b, !Checked(b)); return 0;
         }
         case ID_RP_NEXT: RpFindNext(); return 0;
-        case ID_RP_REPLACE: RpRememberBoth(); RpReplaceOne(); return 0;
-        case ID_RP_ALL: RpRememberBoth(); RpReplaceAll(); return 0;
+        case ID_RP_REPLACE: RpRunReplaceAction(false); return 0;
+        case ID_RP_ALL: RpRunReplaceAction(true); return 0;
         case ID_RP_COUNT: {
             wstring err;
             if (!RpSearchCached(err)) RpInfo(err);
