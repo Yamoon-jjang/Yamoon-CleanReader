@@ -327,6 +327,58 @@ static int InstalledFace(const wchar_t* face) {  // BMP 밖 글자용: 설치 �
     for (int i = 0; i < kFbCount; ++i) if (lstrcmpiW(kFallbackFonts[i].face, face) == 0) return FallbackCoverage(i) ? i : -1;
     return -1;
 }
+// 글 칸의 문서 개체(TOM)로 선택(커서)을 옮기지 않고 글꼴을 바꾸거나 글자를 넣음.
+// 선택을 옮기면 글 칸이 그 자리까지 줄 나눔을 다 해서, 큰 글의 뒤쪽은 한 번에 수십 초가 걸릴 수 있음
+static bool FaceAtNoSel(HWND h, long pos, std::wstring& face);
+static ITextDocument* TomDocOf(HWND h) {  // 부르는 쪽이 Release
+    IUnknown* ole = nullptr;
+    if (!SendMessageW(h, EM_GETOLEINTERFACE, 0, (LPARAM)&ole) || !ole) return nullptr;
+    static const GUID kIidTextDocument = {0x8CC497C0, 0xA1DF, 0x11CE, {0x80, 0x98, 0x00, 0xAA, 0x00, 0x47, 0xBE, 0x5D}};  // ITextDocument
+    ITextDocument* doc = nullptr;
+    HRESULT hr = ole->QueryInterface(kIidTextDocument, (void**)&doc);
+    ole->Release();
+    return SUCCEEDED(hr) ? doc : nullptr;
+}
+static BSTR TomStr(const wchar_t* s, size_t n) {
+    typedef BSTR(WINAPI * SysAllocLenFn)(const OLECHAR*, UINT);
+    static SysAllocLenFn fn = (SysAllocLenFn)(void*)GetProcAddress(LoadLibraryW(L"oleaut32.dll"), "SysAllocStringLen");  // Windows 기본 DLL (실행 때 불러옴)
+    return fn ? fn(s, (UINT)n) : nullptr;
+}
+static void TomFree(BSTR b) {
+    typedef void(WINAPI * SysFreeFn)(BSTR);
+    static SysFreeFn fn = (SysFreeFn)(void*)GetProcAddress(LoadLibraryW(L"oleaut32.dll"), "SysFreeString");
+    if (fn && b) fn(b);
+}
+// 읽기 전용 칸도 잠깐 풀어서 고침 (끝나면 원래대로)
+struct RoUnlock {
+    HWND h; bool ro;
+    explicit RoUnlock(HWND w) : h(w), ro((GetWindowLongW(w, GWL_STYLE) & ES_READONLY) != 0) { if (ro) SendMessageW(h, EM_SETREADONLY, FALSE, 0); }
+    ~RoUnlock() { if (ro) SendMessageW(h, EM_SETREADONLY, TRUE, 0); }
+};
+static bool TomSetFace(ITextDocument* doc, long a, long b, const wchar_t* face) {
+    if (!doc) return false;
+    ITextRange* r = nullptr;
+    if (FAILED(doc->Range(a, b, &r)) || !r) return false;
+    bool ok = false;
+    ITextFont* f = nullptr;
+    if (SUCCEEDED(r->GetFont(&f)) && f) {
+        BSTR nm = TomStr(face, wcslen(face));
+        if (nm) { ok = SUCCEEDED(f->SetName(nm)); TomFree(nm); }
+        f->Release();
+    }
+    r->Release();
+    return ok;
+}
+static bool TomInsert(ITextDocument* doc, long pos, const std::wstring& s) {
+    if (!doc) return false;
+    ITextRange* r = nullptr;
+    if (FAILED(doc->Range(pos, pos, &r)) || !r) return false;
+    BSTR t = TomStr(s.c_str(), s.size());
+    bool ok = t && SUCCEEDED(r->SetText(t));
+    TomFree(t);
+    r->Release();
+    return ok;
+}
 // 글꼴에 없는 글자에만 그 글자가 있는 글꼴을 직접 지정 (글자는 그대로, 화면 표시만).
 // 제로폭 같은 보이지 않는 문자와 한글은 원래 글꼴에 그대로 남겨, Windows 자동 글꼴 바꿈이 앞뒤 글자를 보고 잘못 고르는 일을 막음.
 // 글 칸이 부분 글꼴 지정을 받지 않으면(다른 글자 글꼴까지 바뀌면) 되돌리고 false
@@ -374,12 +426,25 @@ static bool ApplyGlyphFallback(HWND h) {
     CHARFORMAT2W cf = {};
     cf.cbSize = sizeof(cf);
     cf.dwMask = CFM_FACE | CFM_CHARSET;
+    ITextDocument* doc = TomDocOf(h);  // 선택 없이 지정 (글 뒤쪽 묶음도 바로)
+    struct DocRel { ITextDocument* d; ~DocRel() { if (d) d->Release(); } } docRel{doc};
+    RoUnlock unlock(h);
+    MEAS_NOTE(doc ? L"   └ 하나씩 지정: 선택 없이(문서 개체)" : L"   └ 하나씩 지정: 문서 개체 없음 → 선택해서");
     for (size_t r = 0; r < runs.size(); ++r) {
-        CHARRANGE cr = {runs[r].a, runs[r].b};
-        SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
         lstrcpynW(cf.szFaceName, kFallbackFonts[runs[r].font].face, LF_FACESIZE);
         cf.bCharSet = kFallbackFonts[runs[r].font].charset;
-        SendMessageW(h, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+        if (!TomSetFace(doc, runs[r].a, runs[r].b, kFallbackFonts[runs[r].font].face)) {
+            // 선택해서 지정: 글 뒤쪽을 선택하면 그 자리까지 줄 나눔을 다 하느라 멈출 수 있으므로, 앞쪽(20만 자 안)만
+            if (runs[r].a > 200000) {
+                lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);
+                cf.bCharSet = lf.lfCharSet;
+                SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+                return false;
+            }
+            CHARRANGE cr = {runs[r].a, runs[r].b};
+            SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
+            SendMessageW(h, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+        }
         // (큰 글은 뒤쪽 묶음 하나가 몇 초씩 걸릴 수 있어 2초 넘음은 묶음마다 확인)
         if ((r == 64 && elapsedMs() / 64.0 * (double)(runs.size() - 1) > 1500.0) || (r > 0 && elapsedMs() > 2000.0)) {
             lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);  // 너무 오래 걸림: 되돌림
@@ -389,6 +454,8 @@ static bool ApplyGlyphFallback(HWND h) {
         }
         if (r == 0) {  // 첫 지정 뒤 확인: 대상 글자는 바뀌고, 다른 글자는 그대로여야 함 (아니면 이 글 칸은 부분 지정을 못 함)
             auto faceAt = [&](LONG pos) {
+                std::wstring nf;
+                if (FaceAtNoSel(h, pos, nf)) return nf;  // 선택 없이 (글 뒤쪽이어도 바로)
                 CHARRANGE pr = {pos, pos + 1};
                 SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&pr);
                 CHARFORMAT2W chk = {};
@@ -1438,7 +1505,34 @@ static bool InsertGlyphRtf(HWND& h, const wstring& ins) {
         SendMessageW(h, WM_SETREDRAW, FALSE, 0);  // ApplyEditLook이 다시 그리기를 켜므로 넣는 동안은 다시 끔
         return false;
     };
-    if (es.dwError || RawRichText(h, false) != expect) return undo();
+    if (es.dwError) return undo();
+    {
+        std::wstring got = RawRichText(h, false);
+        // 글 칸이 RTF를 읽으며 몇몇 글자를 버리는 일이 있음 (예: 깨진 글자 U+FFFD).
+        // 버려진 글자만 그 자리에 선택 없이 다시 넣어 원본과 같게 맞춤. 그 밖의 다름은 예전처럼 실패
+        if (got != expect && got.size() < expect.size() && expect.size() - got.size() <= 4096) {
+            std::vector<std::pair<long, std::wstring>> miss;  // 결과 글 기준 위치, 빠진 글자
+            size_t i = 0, j = 0;
+            while (i < expect.size()) {
+                if (j < got.size() && got[j] == expect[i]) { ++i; ++j; continue; }
+                if (!miss.empty() && (size_t)miss.back().first + miss.back().second.size() == i) miss.back().second += expect[i];
+                else miss.push_back({(long)i, std::wstring(1, expect[i])});
+                ++i;
+            }
+            if (j == got.size() && !miss.empty()) {
+                ITextDocument* doc = TomDocOf(h);
+                bool ok = doc != nullptr;
+                {
+                    RoUnlock unlock(h);
+                    for (size_t k = 0; ok && k < miss.size(); ++k) ok = TomInsert(doc, miss[k].first, miss[k].second);  // 앞에서부터: 앞 자리를 채우면 뒤 위치가 결과 기준과 같아짐
+                }
+                if (doc) doc->Release();
+                if (ok) got = RawRichText(h, false);
+                MEAS_MARK(L"   └ RTF가 빠뜨린 글자 " + std::to_wstring(miss.size()) + L"곳 채우기" + (ok ? L"" : L" (못 함)"));
+            }
+        }
+        if (got != expect) return undo();
+    }
     MEAS_MARK(L"   └ 넣은 글이 원본과 같은지 확인 (" + meas::Num((long long)expect.size()) + L"자)");
     auto fmtAt = [&](long pos) {
         CHARRANGE pr = {pos, pos + 1};
