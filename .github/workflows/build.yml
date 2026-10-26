@@ -34,6 +34,8 @@ jobs:
           sudo apt-get install -y -q g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64
           x86_64-w64-mingw32-g++-win32 --version | head -1
           x86_64-w64-mingw32-g++-win32 --version | head -1 | grep -q ' 13' || { echo 'GCC 13 required'; exit 1; }
+      - name: Source regression guards and search index test
+        run: python3 tests/verify_source_contracts.py
       - name: Build YamoonCleanReader.exe
         working-directory: src
         run: |
