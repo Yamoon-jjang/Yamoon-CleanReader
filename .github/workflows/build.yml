@@ -45,7 +45,7 @@ jobs:
       - name: Native Windows Unicode recent-file INI regression
         shell: cmd
         run: |
-          call "%ProgramFiles%\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Auxiliary\\Build\\vcvars64.bat"
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           python tests/check_recent_windows.py
 
   build:
