@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the v2.4.3 optimization candidate.
+"""Build-time checks for the v2.4.4 optimization candidate.
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,10 +23,11 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.3"' in main
-assert "FILEVERSION 2,4,3,0" in rc and 'VALUE "ProductVersion", "2.4.3"' in rc
-assert "야문 클린리더 v2.4.3" in manual
-assert "v2.4.3 시험 빌드" in manual
+assert 'kVersion = L"2.4.4"' in main
+assert "FILEVERSION 2,4,4,0" in rc and 'VALUE "ProductVersion", "2.4.4"' in rc
+assert "야문 클린리더 v2.4.4" in manual
+assert "v2.4.4 시험 빌드" in manual
+assert "u16:" in main and "RecoverDamagedRecentPath" in main
 assert "kMixQuoteSpan" in engine  # do not alter long-standing text rules
 
 # Confirm the engine still has the exact pre-optimization blob, not just a
@@ -74,4 +75,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.4.3 source contracts and 600,001 actual hit-index cases: PASS")
+print("v2.4.4 source contracts and 600,001 actual hit-index cases: PASS")
