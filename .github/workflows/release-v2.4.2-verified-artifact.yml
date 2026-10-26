@@ -1,0 +1,54 @@
+name: Publish v2.4.2 verified CI artifact (one-time fallback)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-v2.4.2-verified-artifact.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download successful v2.4.2 Windows CI build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 40334434427 --repo "$GITHUB_REPOSITORY" -n YamoonCleanReader-Windows-Portable -D out
+      - name: Verify binary SHA-256 and version before publishing
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+          exe = Path('out/YamoonCleanReader/YamoonCleanReader.exe')
+          data = exe.read_bytes()
+          assert hashlib.sha256(data).hexdigest() == 'df3197cac7edaf4dd41ff21b2adc9d722128b653f4b77b93a9e99e786ca557db'
+          assert '2.4.2'.encode('utf-16-le') in data
+          readme = Path('out/YamoonCleanReader/README.txt').read_bytes()
+          assert b'v2.4.2' in readme
+          assert Path('out/YamoonCleanReader/THIRD_PARTY_NOTICES.txt').is_file()
+          assert Path('out/YamoonCleanReader/LICENSE.txt').is_file()
+          assert Path('.github/release-notes/v2.4.2.md').is_file()
+          print('Release input: verified v2.4.2 PR CI binary, SHA-256 and documentation OK')
+          PY
+      - name: Create official release (do not overwrite an existing release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          (cd out && zip -qr ../Yamoon-CleanReader-v2.4.2-Windows.zip YamoonCleanReader)
+          if gh release view v2.4.2 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release v2.4.2 already exists; no overwrite'
+            exit 0
+          fi
+          gh release create v2.4.2 Yamoon-CleanReader-v2.4.2-Windows.zip --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title '야문 클린리더 v2.4.2' \
+            --notes-file .github/release-notes/v2.4.2.md
+          echo 'Official GitHub Release v2.4.2 created from previously verified CI artifact'
