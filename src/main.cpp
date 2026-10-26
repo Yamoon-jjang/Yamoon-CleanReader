@@ -85,7 +85,7 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4.3";
+static const wchar_t* kVersion = L"2.4.4";
 static const wchar_t* kDate = L"2026년 10월 26일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
@@ -2021,21 +2021,100 @@ static bool ConfirmDiscardEdits() {
                        L"야문 클린리더", MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
 
-// 최근 파일 (ini [recent] r0..r19)
+// 최근 파일 (ini [recent] r0..r19).
+// Windows WritePrivateProfileStringW still writes to an ANSI INI in the current
+// system code page. Unrepresentable CJK characters become literal '?' and paths
+// can no longer be opened. Use an ASCII-only lossless UTF-16 hex representation.
+// Keep other INI sections, reading positions, and older Unicode/ANSI entries as-is.
 static const int kMaxRecent = 20;
+static wstring RecentEncodePath(const wstring& path) {
+    static const wchar_t* hex = L"0123456789ABCDEF";
+    wstring out = L"u16:";
+    out.reserve(4 + path.size() * 4);
+    for (wchar_t c : path) {
+        unsigned v = (unsigned)(unsigned short)c;
+        out += hex[(v >> 12) & 15];
+        out += hex[(v >> 8) & 15];
+        out += hex[(v >> 4) & 15];
+        out += hex[v & 15];
+    }
+    return out;
+}
+static bool RecentDecodePath(const wstring& stored, wstring& path) {
+    if (stored.compare(0, 4, L"u16:") != 0) { path = stored; return true; }
+    if (stored.size() <= 4 || (stored.size() - 4) % 4 != 0) return false;
+    wstring decoded;
+    decoded.reserve((stored.size() - 4) / 4);
+    for (size_t i = 4; i < stored.size(); i += 4) {
+        unsigned v = 0;
+        for (int j = 0; j < 4; ++j) {
+            wchar_t c = stored[i + j];
+            unsigned digit = c >= L'0' && c <= L'9' ? (unsigned)(c - L'0') :
+                             c >= L'A' && c <= L'F' ? (unsigned)(c - L'A' + 10) : 16u;
+            if (digit >= 16) return false;
+            v = (v << 4) | digit;
+        }
+        if (v == 0) return false; // embedded NUL is not a valid Windows path
+        decoded += (wchar_t)v;
+    }
+    path.swap(decoded);
+    return true;
+}
+static wstring RecentIniValue(int index) {
+    const wstring key = L"r" + std::to_wstring(index);
+    std::vector<wchar_t> buf(1024);
+    while (buf.size() <= 32768) {
+        DWORD n = GetPrivateProfileStringW(L"recent", key.c_str(), L"", buf.data(), (DWORD)buf.size(), g_ini.c_str());
+        if (n < buf.size() - 1) return wstring(buf.data(), n);
+        buf.resize(buf.size() * 2);
+    }
+    return L""; // never accept a truncated path
+}
 static std::vector<wstring> LoadRecent() {
     std::vector<wstring> v;
     for (int i = 0; i < kMaxRecent; ++i) {
-        wchar_t b[MAX_PATH * 2] = {};
-        GetPrivateProfileStringW(L"recent", (L"r" + std::to_wstring(i)).c_str(), L"", b, MAX_PATH * 2, g_ini.c_str());
-        if (b[0]) v.push_back(b);
+        wstring stored = RecentIniValue(i), path;
+        if (!stored.empty() && RecentDecodePath(stored, path) && !path.empty()) v.push_back(path);
     }
     return v;
 }
 static void SaveRecent(const std::vector<wstring>& v) {
+    // Only this section is rewritten. Do not change the legacy INI encoding or
+    // other settings in place: a global file conversion would be much riskier.
     WritePrivateProfileStringW(L"recent", nullptr, nullptr, g_ini.c_str());
-    for (size_t i = 0; i < v.size() && i < (size_t)kMaxRecent; ++i)
-        WritePrivateProfileStringW(L"recent", (L"r" + std::to_wstring(i)).c_str(), v[i].c_str(), g_ini.c_str());
+    for (size_t i = 0; i < v.size() && i < (size_t)kMaxRecent; ++i) {
+        const wstring encoded = RecentEncodePath(v[i]);
+        WritePrivateProfileStringW(L"recent", (L"r" + std::to_wstring(i)).c_str(), encoded.c_str(), g_ini.c_str());
+    }
+}
+// Previously ANSI-damaged names may contain literal '?' characters, which are
+// forbidden in Windows file names. Recover ONLY a unique exact-length filename
+// match from the original, still-valid parent directory. Ambiguous matches
+// are deliberately left alone rather than opening the wrong novel.
+static bool RecentMaskedNameMatch(const wstring& mask, const wstring& name) {
+    if (mask.size() != name.size()) return false;
+    for (size_t i = 0; i < mask.size(); ++i)
+        if (mask[i] != L'?' && towlower(mask[i]) != towlower(name[i])) return false;
+    return true;
+}
+static wstring RecoverDamagedRecentPath(const wstring& path) {
+    size_t slash = path.find_last_of(L"\\/");
+    if (slash == wstring::npos) return L"";
+    wstring dir = path.substr(0, slash + 1), mask = path.substr(slash + 1);
+    if (dir.find(L'?') != wstring::npos || mask.find(L'?') == wstring::npos || mask.empty()) return L"";
+    WIN32_FIND_DATAW fd = {};
+    HANDLE h = FindFirstFileW((dir + L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return L"";
+    wstring recovered;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        if (!RecentMaskedNameMatch(mask, fd.cFileName)) continue;
+        wstring full = dir + fd.cFileName;
+        if (!recovered.empty()) { recovered.clear(); break; }
+        recovered = full;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return recovered;
 }
 static void AddRecent(const wstring& path) {
     if (g_ini.empty() || path.empty()) return;
@@ -3428,6 +3507,15 @@ static void ShowThemeMenu(HWND anchor) {
 static void ShowRecentMenu(HWND anchor) {
     HideTip();
     std::vector<wstring> v = LoadRecent();
+    bool repaired = false;
+    for (auto& path : v) {
+        if (FileExists(path)) continue;
+        wstring recovered = RecoverDamagedRecentPath(path);
+        if (recovered.empty()) continue;
+        path.swap(recovered);
+        repaired = true;
+    }
+    if (repaired) SaveRecent(v); // persist uniquely recovered paths in lossless form
     HMENU m = CreatePopupMenu();
     if (v.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(최근에 연 파일이 없습니다)");
     for (size_t k = 0; k < v.size(); ++k) {
