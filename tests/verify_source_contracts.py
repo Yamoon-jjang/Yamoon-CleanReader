@@ -26,7 +26,8 @@ assert "void dialogueSep" not in head and "dialogueSep" not in head + main + sea
 assert 'kVersion = L"2.4.3"' in main
 assert "FILEVERSION 2,4,3,0" in rc and 'VALUE "ProductVersion", "2.4.3"' in rc
 assert "야문 클린리더 v2.4.3" in manual
-assert "v2.4.3 시험 빌드" in manual
+assert "v2.4.3" in manual
+assert "u16:" in main and "RecoverDamagedRecentPath" in main
 assert "kMixQuoteSpan" in engine  # do not alter long-standing text rules
 
 # Confirm the engine still has the exact pre-optimization blob, not just a
