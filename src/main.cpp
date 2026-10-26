@@ -83,8 +83,8 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4.1";
-static const wchar_t* kDate = L"2026년 10월 25일";
+static const wchar_t* kVersion = L"2.4.2";
+static const wchar_t* kDate = L"2026년 10월 26일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
 #ifndef BUILD_UTC
@@ -125,6 +125,8 @@ static U32 g_text;
 static wstring g_path;
 static int g_enc = E_UTF8;
 static bool g_loading = false, g_dstDirty = false, g_syncing = false, g_srcPending = false;
+// 찾기·바꾸기 검색 캐시는 결과 글이 실제로 달라졌을 때만 새로 만든다.
+static unsigned long long g_rpTextSerial = 0;
 static U32 g_out;                    // 현재 결과(엔진 출력)
 static std::vector<int> g_outToSrc;  // 결과 글자 -> 원본 글자 위치
 static std::vector<int> g_srcToOut;  // 원본 글자 -> 결과 글자 위치
@@ -1475,6 +1477,7 @@ static bool InsertGlyphRtf(HWND& h, const wstring& ins) {
     return true;
 }
 static void SetRichText(HWND h, const wstring& s) {
+    if (h == g_dst) ++g_rpTextSerial;  // 로딩 중 EN_CHANGE가 억제돼도 검색 캐시를 무효화
 #ifdef MEASURE
     const wstring mp = h == g_src ? L"[원본 칸] " : h == g_dst ? L"[결과 칸] " : L"[다른 칸] ";
     MEAS_MARK(mp + L"글 넣기 전 준비");
@@ -3393,19 +3396,32 @@ static void ShowRecentMenu(HWND anchor) {
         size_t sl = v[k].find_last_of(L"\\/");
         wstring name = sl == wstring::npos ? v[k] : v[k].substr(sl + 1);
         for (auto& ch : name) if (ch == L'&') ch = L'+';
+        // 외장 드라이브나 옮겨진 파일도 선택을 막지 않고, 클릭 시 복구 경로를 안내한다.
+        const bool missing = !FileExists(v[k]);
+        if (missing) name += L"  [위치 확인]";
         wchar_t buf[64] = {};
         GetPrivateProfileStringW(L"pos", PosKey(v[k]).c_str(), L"", buf, 64, g_ini.c_str());
         long a = 0, b = 0;
         wstring w = (v.size() >= 10 && k + 1 < 10 ? L"  " : L"") + std::to_wstring(k + 1) + L"  " + name;  // 10번부터 두 자리 — 한 자리 번호 앞에 공백 두 칸(숫자 한 자리 폭)으로 줄 맞춤
         if (swscanf(buf, L"%ld,%ld", &a, &b) == 2 && b > 0) w += L"\t" + std::to_wstring((int)(100.0 * a / b + 0.5)) + L"%";
-        AppendMenuW(m, MF_STRING | (GetFileAttributesW(v[k].c_str()) == INVALID_FILE_ATTRIBUTES ? MF_GRAYED : 0), ID_RECENT_BASE + (UINT)k, w.c_str());
+        AppendMenuW(m, MF_STRING, ID_RECENT_BASE + (UINT)k, w.c_str());
     }
     if (!v.empty()) { AppendMenuW(m, MF_SEPARATOR, 0, nullptr); AppendMenuW(m, MF_STRING, ID_RECENT_CLEAR, L"목록 비우기"); }
     RECT r; GetWindowRect(anchor, &r);
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, g_hwnd, nullptr);
     DestroyMenu(m);
     if (cmd == ID_RECENT_CLEAR) { SaveRecent({}); SetStatus(L"최근 파일 목록을 비웠습니다."); }
-    else if (cmd >= ID_RECENT_BASE && cmd < ID_RECENT_BASE + (int)v.size()) { wstring path = v[cmd - ID_RECENT_BASE]; LoadFile(path); }
+    else if (cmd >= ID_RECENT_BASE && cmd < ID_RECENT_BASE + (int)v.size()) {
+        wstring path = v[cmd - ID_RECENT_BASE];
+        if (FileExists(path)) LoadFile(path);
+        else {
+            wstring msg = L"최근 파일의 원래 위치를 확인할 수 없습니다.\n\n" + path +
+                L"\n\n파일이 이동했거나 외장 드라이브·네트워크가 연결되지 않았을 수 있습니다.\n"
+                L"새 위치에서 파일을 고르시겠습니까? (기존 목록은 그대로 유지됩니다.)";
+            if (MessageBoxW(g_hwnd, msg.c_str(), L"최근 파일 위치 확인", MB_YESNO | MB_ICONQUESTION) == IDYES)
+                PostMessageW(g_hwnd, WM_COMMAND, MAKEWPARAM(ID_OPEN, BN_CLICKED), 0);
+        }
+    }
 }
 
 // 전체 화면 (읽기 모드)
@@ -5423,11 +5439,17 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
     if (q.empty()) { err = L"찾을 말을 적어 주세요."; return false; }
     bool cs = Checked(GetDlgItem(g_rpWnd, ID_RP_CASE)), word = Checked(GetDlgItem(g_rpWnd, ID_RP_WORD));
     bool rx = Checked(GetDlgItem(g_rpWnd, ID_RP_REGEX));
-    // 보이는 글자만 모은 글 + 원래 위치
-    wstring vis;
+    // 일반 글에는 보이지 않는 서식 문자가 거의 없다. 이때는 별도 위치표(글자당 size_t)를 만들지 않는다.
+    bool stripped = false;
+    for (wchar_t c : hay) if (IsInvisibleCh((char32_t)c)) { stripped = true; break; }
+    wstring filtered;
     std::vector<size_t> vp;
-    vis.reserve(hay.size()); vp.reserve(hay.size());
-    for (size_t i = 0; i < hay.size(); ++i) if (!IsInvisibleCh((char32_t)hay[i])) { vis += hay[i]; vp.push_back(i); }
+    if (stripped) {
+        filtered.reserve(hay.size()); vp.reserve(hay.size());
+        for (size_t i = 0; i < hay.size(); ++i)
+            if (!IsInvisibleCh((char32_t)hay[i])) { filtered += hay[i]; vp.push_back(i); }
+    }
+    const wstring& vis = stripped ? filtered : hay;
     auto wordOk = [&](size_t s, size_t e) {
         if (!word) return true;
         if (s > 0 && RpWordCh(vis[s - 1]) && RpWordCh(vis[s])) return false;
@@ -5435,17 +5457,24 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
         return true;
     };
     auto add = [&](size_t s, size_t e, const wstring& rep) {
-        RpHit h; h.a = vp[s]; h.b = vp[e - 1] + 1; h.rep = rep;
-        for (size_t k = h.a; k < h.b; ++k) if (IsInvisibleCh((char32_t)hay[k])) h.rep += hay[k];  // 서식 문자는 남김
+        RpHit h; h.a = stripped ? vp[s] : s; h.b = stripped ? vp[e - 1] + 1 : e; h.rep = rep;
+        if (stripped) for (size_t k = h.a; k < h.b; ++k)
+            if (IsInvisibleCh((char32_t)hay[k])) h.rep += hay[k];  // 서식 문자는 남김
         hits.push_back(h);
     };
     const size_t kMax = 200000;
     if (!rx) {
-        wstring V = vis, Q = q;
-        if (!cs) { for (auto& c : V) c = RpFold(c); for (auto& c : Q) c = RpFold(c); }
+        wstring V, Q = q;
+        const wstring* searchText = &vis;
+        if (!cs) {
+            V = vis;
+            for (auto& c : V) c = RpFold(c);
+            for (auto& c : Q) c = RpFold(c);
+            searchText = &V;
+        }
         size_t pos = 0;
         while (hits.size() < kMax) {
-            size_t k = V.find(Q, pos);
+            size_t k = searchText->find(Q, pos);
             if (k == wstring::npos) break;
             if (wordOk(k, k + Q.size())) { add(k, k + Q.size(), repl); pos = k + Q.size(); }
             else pos = k + 1;
@@ -5519,6 +5548,31 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
     }
     return true;
 }
+// 같은 문서·같은 검색 조건에서는 전체 텍스트 추출과 정규식/일반 검색을 반복하지 않는다.
+// 문서 내용 변경은 SetRichText 및 결과 칸 EN_CHANGE에서 g_rpTextSerial로 감지한다.
+static wstring g_rpCacheHay, g_rpCacheFind, g_rpCacheRepl, g_rpCacheError;
+static std::vector<RpHit> g_rpCacheHits;
+static unsigned long long g_rpCacheSerial = 0;
+static bool g_rpCacheValid = false, g_rpCacheOk = false;
+static bool g_rpCacheCase = false, g_rpCacheWord = false, g_rpCacheRegex = false;
+static bool RpSearchCached(wstring& err) {
+    const wstring q = RpGet(g_rpFind, g_rpFindX), t = RpGet(g_rpRepl, g_rpReplX);
+    const bool cs = Checked(GetDlgItem(g_rpWnd, ID_RP_CASE));
+    const bool word = Checked(GetDlgItem(g_rpWnd, ID_RP_WORD));
+    const bool rx = Checked(GetDlgItem(g_rpWnd, ID_RP_REGEX));
+    if (!g_rpCacheValid || g_rpCacheSerial != g_rpTextSerial ||
+        g_rpCacheFind != q || g_rpCacheRepl != t ||
+        g_rpCacheCase != cs || g_rpCacheWord != word || g_rpCacheRegex != rx) {
+        g_rpCacheHay = RpHay();
+        g_rpCacheOk = RpSearch(g_rpCacheHay, g_rpCacheHits, g_rpCacheError);
+        g_rpCacheFind = q; g_rpCacheRepl = t;
+        g_rpCacheCase = cs; g_rpCacheWord = word; g_rpCacheRegex = rx;
+        g_rpCacheSerial = g_rpTextSerial;
+        g_rpCacheValid = true;
+    }
+    err = g_rpCacheError;
+    return g_rpCacheOk;
+}
 static void RpInfo(const wstring& s) { SetWindowTextW(g_rpInfo, s.c_str()); }
 // 바꿀 수 있나: 정리 모드는 결과 칸 전체가 보일 때, 읽기 모드는 늘 (글 전체가 보이므로)
 static bool RpEditable() { return !g_busy && !g_text.empty() && (g_reading || !g_preview); }
@@ -5556,10 +5610,10 @@ static void RpRemember(HWND combo) {  // 찾은 말 기록 (이번에 켠 동안
 }
 // 찾을 말을 적는 동안 바로 찾아 보여 줌 (지금 고른 곳부터)
 static void RpFindIncr() {
-    wstring hay = RpHay(), err;
-    std::vector<RpHit> hits;
+    wstring err;
     if (RpGet(g_rpFind, g_rpFindX).empty()) { RpInfo(L""); return; }
-    if (!RpSearch(hay, hits, err)) { RpInfo(err); return; }
+    if (!RpSearchCached(err)) { RpInfo(err); return; }
+    const auto& hits = g_rpCacheHits;
     if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return; }
     CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
     int pick = 0;
@@ -5570,9 +5624,9 @@ static void RpFindIncr() {
     RpInfo(std::to_wstring(pick + 1) + L" / " + std::to_wstring(hits.size()) + L"곳");
 }
 static bool RpFindNext(bool quiet = false) {
-    wstring hay = RpHay(), err;
-    std::vector<RpHit> hits;
-    if (!RpSearch(hay, hits, err)) { RpInfo(err); return false; }
+    wstring err;
+    if (!RpSearchCached(err)) { RpInfo(err); return false; }
+    const auto& hits = g_rpCacheHits;
     if (!g_rpExpanded) RpRemember(g_rpFind);
     if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return false; }
     CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
@@ -5597,24 +5651,25 @@ static bool RpFindNext(bool quiet = false) {
 }
 static void RpReplaceOne() {
     if (!RpEditable()) { RpInfo(L"큰 파일은 정리 모드에서 앞부분만 보이므로 바꾸기는 읽기 모드에서 하세요."); return; }
-    wstring hay = RpHay(), err;
-    std::vector<RpHit> hits;
-    if (!RpSearch(hay, hits, err)) { RpInfo(err); return; }
+    wstring err;
+    if (!RpSearchCached(err)) { RpInfo(err); return; }
+    const auto& hits = g_rpCacheHits;
     CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
     for (auto& hh : hits) {
         if ((LONG)hh.a == cr.cpMin && (LONG)hh.b == cr.cpMax) {  // 지금 고른 곳이 찾은 말이면 바꿈
             bool ro = (GetWindowLongW(g_dst, GWL_STYLE) & ES_READONLY) != 0;  // 읽기 모드 칸은 잠깐 풀었다가 다시 잠금
             if (ro) SendMessageW(g_dst, EM_SETREADONLY, FALSE, 0);
-            SendMessageW(g_dst, EM_REPLACESEL, TRUE, (LPARAM)hh.rep.c_str());
+            const wstring replacement = hh.rep;  // EN_CHANGE 중 검색 캐시가 갱신되어도 유효한 복사본
+            SendMessageW(g_dst, EM_REPLACESEL, TRUE, (LPARAM)replacement.c_str());
             if (ro) SendMessageW(g_dst, EM_SETREADONLY, TRUE, 0);
             g_dstDirty = true;
             RpCommit();
             RpFindNext(true);
-            if (GetWindowTextLengthW(g_rpInfo) == 0 || true) {
-                std::vector<RpHit> left; wstring e2;
-                RpSearch(RpHay(), left, e2);
-                RpInfo(L"1곳을 바꿨습니다.  남은 곳: " + std::to_wstring(left.size()));
-            }
+            // 다음 찾기에서 이미 갱신된 검색 결과를 그대로 재사용한다.
+            wstring e2;
+            if (RpSearchCached(e2))
+                RpInfo(L"1곳을 바꿨습니다.  남은 곳: " + std::to_wstring(g_rpCacheHits.size()));
+            else RpInfo(e2);
             return;
         }
     }
@@ -5623,9 +5678,10 @@ static void RpReplaceOne() {
 static void RpRememberBoth() { if (!g_rpExpanded) { RpRemember(g_rpFind); RpRemember(g_rpRepl); } }
 static void RpReplaceAll() {
     if (!RpEditable()) { RpInfo(L"큰 파일은 정리 모드에서 앞부분만 보이므로 바꾸기는 읽기 모드에서 하세요."); return; }
-    wstring hay = RpHay(), err;
-    std::vector<RpHit> hits;
-    if (!RpSearch(hay, hits, err)) { RpInfo(err); return; }
+    wstring err;
+    if (!RpSearchCached(err)) { RpInfo(err); return; }
+    const auto& hay = g_rpCacheHay;
+    const auto& hits = g_rpCacheHits;
     if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return; }
     wstring before = GetRichText(g_dst), out;
     out.reserve(hay.size());
@@ -5849,9 +5905,9 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_RP_REPLACE: RpRememberBoth(); RpReplaceOne(); return 0;
         case ID_RP_ALL: RpRememberBoth(); RpReplaceAll(); return 0;
         case ID_RP_COUNT: {
-            wstring err; std::vector<RpHit> hits;
-            if (!RpSearch(RpHay(), hits, err)) RpInfo(err);
-            else RpInfo(hits.empty() ? L"찾는 말이 없습니다." : std::to_wstring(hits.size()) + L"곳 있습니다." + (g_preview && !g_reading ? L"  (화면에 보이는 앞부분 기준)" : L""));
+            wstring err;
+            if (!RpSearchCached(err)) RpInfo(err);
+            else RpInfo(g_rpCacheHits.empty() ? L"찾는 말이 없습니다." : std::to_wstring(g_rpCacheHits.size()) + L"곳 있습니다." + (g_preview && !g_reading ? L"  (화면에 보이는 앞부분 기준)" : L""));
             return 0;
         }
         case ID_RP_RULE: RpAddRule(); return 0;
@@ -5865,7 +5921,12 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
     case WM_CLOSE: DestroyWindow(h); return 0;
-    case WM_DESTROY: RpSaveState(); g_rpWnd = nullptr; g_rpExpanded = false; SetFocus(g_dst); return 0;
+    case WM_DESTROY:
+        RpSaveState();
+        g_rpCacheValid = false;
+        wstring().swap(g_rpCacheHay);
+        std::vector<RpHit>().swap(g_rpCacheHits);  // 큰 파일 검색 메모리는 창을 닫으면 반환
+        g_rpWnd = nullptr; g_rpExpanded = false; SetFocus(g_dst); return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
@@ -6403,7 +6464,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             if (code == EN_CHANGE && !g_loading) { DmUpdate(g_src); g_srcPending = true; SetTimer(h, TIMER_SRC, 400, nullptr); }
             return 0;
         case ID_DST:
-            if (code == EN_CHANGE && !g_loading) { DmUpdate(g_dst); g_dstDirty = true; }
+            if (code == EN_CHANGE && !g_loading) { DmUpdate(g_dst); g_dstDirty = true; ++g_rpTextSerial; }
             return 0;
         }
         break;
