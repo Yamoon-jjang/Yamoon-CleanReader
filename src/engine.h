@@ -9,7 +9,6 @@ struct TidyOptions {
     int  spaceMode   = 0;    // 합칠 때 띄어쓰기: 0 자동, 1 항상 띄움, 2 항상 붙임
     int  splitMode   = 1;    // 0 긴 문단만 나눔, 1 문장마다 줄바꿈(기본), 2 나누지 않음
     int  longLen     = 400;  // 긴 문단 기준(글자 수). 넘으면 약 60% 길이 조각으로 나눔
-    bool dialogueSep = false; // (사용 안 함) 대사 분리
     int  paraSep     = 0;    // 0 문단 사이 빈 줄, 1 줄바꿈만
     int  sceneMode   = 0;    // 장면 전환(원문에서 드물게 더 넓힌 문단 간격): 0 빈 줄 하나 더, 1 "* * *" 넣기, 2 구분 안 함
     int  indent      = 0;    // 0 없음, 1 공백 1칸, 2 공백 2칸, 3 전각 공백
