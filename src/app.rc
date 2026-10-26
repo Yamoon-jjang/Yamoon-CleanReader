@@ -3,8 +3,8 @@
 1 ICON "app.ico"
 1 RT_MANIFEST "app.manifest"
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 2,4,1,0
-PRODUCTVERSION 2,4,1,0
+FILEVERSION 2,4,2,0
+PRODUCTVERSION 2,4,2,0
 FILEOS 0x40004
 FILETYPE 0x1
 BEGIN
@@ -15,8 +15,8 @@ BEGIN
       VALUE "CompanyName", "야문 짱"
       VALUE "FileDescription", "야문 클린리더"
       VALUE "ProductName", "야문 클린리더"
-      VALUE "FileVersion", "2.4.1"
-      VALUE "ProductVersion", "2.4.1"
+      VALUE "FileVersion", "2.4.2"
+      VALUE "ProductVersion", "2.4.2"
       VALUE "InternalName", "YamoonCleanReader"
       VALUE "OriginalFilename", "YamoonCleanReader.exe"
       VALUE "LegalCopyright", "Copyright (C) 2026 야문 짱. 야문 짱 & Claude 협동작."
