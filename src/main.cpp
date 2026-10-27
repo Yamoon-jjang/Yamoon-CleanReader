@@ -85,8 +85,8 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4.3";
-static const wchar_t* kDate = L"2026년 10월 26일";
+static const wchar_t* kVersion = L"2.4.4";
+static const wchar_t* kDate = L"2026년 10월 27일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
 #ifndef BUILD_UTC
@@ -3456,6 +3456,43 @@ static void FullTip() {  // 전체 화면 단추 (켜짐에 따라 이름이 바
     else SetTip(g_btnFull, L"전체 화면", L"F11");
 }
 
+// 메뉴 항목 글자: '&'는 밑줄 표시 기호라서 두 번 써야 글자 그대로 보임
+static wstring MenuText(const wstring& s) {
+    wstring o;
+    o.reserve(s.size() + 4);
+    for (wchar_t c : s) {
+        if (c == L'&') o += L"&&";
+        else if (c == L'\t' || c == L'\r' || c == L'\n') o += L' ';  // 탭은 오른쪽 칸(%) 구분 기호
+        else o += c;
+    }
+    return o;
+}
+// 단추로 여는 팝업 메뉴: 메뉴가 열린 채 같은 단추를 다시 누르면 메뉴만 닫히고 다시 열리지 않게 함
+static HWND g_menuCloseBtn = nullptr;
+static DWORD g_menuCloseTick = 0;
+static int TrackBtnMenu(HMENU m, HWND btn, UINT flags, int x, int y) {
+    int cmd = TrackPopupMenu(m, flags | TPM_RETURNCMD, x, y, 0, g_hwnd, nullptr);
+    g_menuCloseBtn = nullptr;
+    if (cmd == 0 && btn) {
+        POINT pt; GetCursorPos(&pt);
+        RECT br; GetWindowRect(btn, &br);
+        if (PtInRect(&br, pt)) {
+            // 메뉴를 닫은 그 클릭이 단추에 전달되면 메뉴가 곧바로 다시 열림 → 그 클릭을 버림.
+            // 아직 줄에 남아 있으면 지우고, 이미 전달됐으면 곧 이어지는 단추 클릭 한 번을 무시한다.
+            MSG msg;
+            while (PeekMessageW(&msg, btn, WM_LBUTTONDOWN, WM_LBUTTONDBLCLK, PM_REMOVE)) {}
+            g_menuCloseBtn = btn;
+            g_menuCloseTick = GetTickCount();
+        }
+    }
+    return cmd;
+}
+static bool SwallowMenuReclick(HWND btn) {
+    bool hit = btn && g_menuCloseBtn == btn && GetTickCount() - g_menuCloseTick < 800;
+    g_menuCloseBtn = nullptr;
+    return hit;
+}
+
 // 목차: 회차·장 제목 줄
 static bool IsDigitCh(char32_t c) { return (c >= '0' && c <= '9') || (c >= 0xFF10 && c <= 0xFF19); }
 static bool StartsWithStr(const U32& t, size_t i, const char32_t* w) {
@@ -3504,12 +3541,11 @@ static void ShowTocMenu(HWND anchor) {
         while (e < hay.size() && hay[e] != '\n') ++e;
         U32 line;
         for (size_t q = pos[k]; q < e && line.size() < 40; ++q) if (!IsInvisibleCh(hay[q])) line += hay[q];
-        wstring w = U32ToW(line, false);
-        for (auto& ch : w) if (ch == L'&') ch = L'+';
+        wstring w = MenuText(U32ToW(line, false));
         AppendMenuW(m, MF_STRING | ((int)k == cur ? MF_CHECKED : 0) | (k && k % 40 == 0 ? MF_MENUBARBREAK : 0), ID_TOC_BASE + (UINT)k, w.c_str());
     }
     RECT r; GetWindowRect(anchor, &r);
-    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, g_hwnd, nullptr);
+    int cmd = TrackBtnMenu(m, anchor, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom);
     DestroyMenu(m);
     if (cmd >= ID_TOC_BASE && cmd < ID_TOC_BASE + (int)pos.size()) {
         size_t at = pos[cmd - ID_TOC_BASE];
@@ -3572,13 +3608,12 @@ static void ShowMarkMenu(HWND anchor) {
         U32 line;
         for (size_t q = a; q < g_out.size() && g_out[q] != '\n' && line.size() < 30; ++q) if (!IsInvisibleCh(g_out[q])) line += g_out[q];
         int pct = g_out.empty() ? 0 : (int)(100.0 * v[k] / g_out.size() + 0.5);
-        wstring w = std::to_wstring(pct) + L"%   " + U32ToW(line, false);
-        for (auto& ch : w) if (ch == L'&') ch = L'+';
+        wstring w = std::to_wstring(pct) + L"%   " + MenuText(U32ToW(line, false));
         AppendMenuW(m, MF_STRING, ID_MARK_BASE + (UINT)k, w.c_str());
     }
     if (!v.empty()) { AppendMenuW(m, MF_SEPARATOR, 0, nullptr); AppendMenuW(m, MF_STRING, ID_MARK_CLEAR, L"이 글의 책갈피 모두 지우기"); }
     RECT r; GetWindowRect(anchor, &r);
-    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, g_hwnd, nullptr);
+    int cmd = TrackBtnMenu(m, anchor, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom);
     DestroyMenu(m);
     if (cmd == ID_MARK_ADD) AddMark();
     else if (cmd == ID_MARK_CLEAR) { SaveMarks({}); SetStatus(L"이 글의 책갈피를 모두 지웠습니다."); }
@@ -3603,7 +3638,7 @@ static void ShowThemeMenu(HWND anchor) {
     AppendMenuW(m, MF_STRING | (g_themeMode == 1 ? MF_CHECKED : 0), ID_THEME_LIGHT, L"밝게");
     AppendMenuW(m, MF_STRING | (g_themeMode == 2 ? MF_CHECKED : 0), ID_THEME_DARK, L"어둡게");
     RECT r; GetWindowRect(anchor, &r);
-    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN, r.right, r.bottom, 0, g_hwnd, nullptr);
+    int cmd = TrackBtnMenu(m, anchor, TPM_RIGHTALIGN | TPM_TOPALIGN, r.right, r.bottom);
     DestroyMenu(m);
     if (cmd >= ID_THEME_SYS && cmd <= ID_THEME_DARK) {
         SetTheme(cmd - ID_THEME_SYS);
@@ -3611,52 +3646,46 @@ static void ShowThemeMenu(HWND anchor) {
         SetStatus(wstring(L"화면 테마: ") + (g_themeMode == 0 ? L"Windows 설정 따르기" : g_themeMode == 1 ? L"밝게" : L"어둡게"));
     }
 }
-static void ShowRecentMenu(HWND anchor) {
+static void ShowRecentMenu(HWND anchor, HWND clickBtn) {
     HideTip();
     std::vector<wstring> v = LoadRecent();
     bool repaired = false;
-    for (auto& path : v) {
-        if (FileExists(path)) continue;
-        wstring recovered = RecoverDamagedRecentPath(path);
-        if (recovered.empty()) continue;
-        path.swap(recovered);
+    std::vector<bool> missing(v.size(), false);
+    for (size_t k = 0; k < v.size(); ++k) {
+        if (FileExists(v[k])) continue;
+        wstring recovered = RecoverDamagedRecentPath(v[k]);
+        if (recovered.empty()) { missing[k] = true; continue; }
+        v[k].swap(recovered);
         repaired = true;
     }
     if (repaired) SaveRecent(v); // persist uniquely recovered paths in lossless form
     HMENU m = CreatePopupMenu();
     if (v.empty()) AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(최근에 연 파일이 없습니다)");
     for (size_t k = 0; k < v.size(); ++k) {
-        size_t sl = v[k].find_last_of(L"\\/");
-        wstring name = sl == wstring::npos ? v[k] : v[k].substr(sl + 1);
-        for (auto& ch : name) if (ch == L'&') ch = L'+';
-        // 외장 드라이브나 옮겨진 파일도 선택을 막지 않고, 클릭 시 복구 경로를 안내한다.
-        const bool missing = !FileExists(v[k]);
-        if (missing) name += L"  [위치 확인]";
+        // 옮겨지거나 지워진 파일(연결이 끊긴 외장 드라이브·네트워크 포함)은 회색으로만 표시하고 고를 수 없게 함.
+        // 목록에서는 지우지 않으므로 드라이브를 다시 연결하면 그대로 다시 쓸 수 있음.
+        wstring name = MenuText(FileName(v[k]));
         wchar_t buf[64] = {};
         GetPrivateProfileStringW(L"pos", PosKey(v[k]).c_str(), L"", buf, 64, g_ini.c_str());
         long a = 0, b = 0;
         wstring w = (v.size() >= 10 && k + 1 < 10 ? L"  " : L"") + std::to_wstring(k + 1) + L"  " + name;  // 10번부터 두 자리 — 한 자리 번호 앞에 공백 두 칸(숫자 한 자리 폭)으로 줄 맞춤
         if (swscanf(buf, L"%ld,%ld", &a, &b) == 2 && b > 0) w += L"\t" + std::to_wstring((int)(100.0 * a / b + 0.5)) + L"%";
-        AppendMenuW(m, MF_STRING, ID_RECENT_BASE + (UINT)k, w.c_str());
+        AppendMenuW(m, MF_STRING | (missing[k] ? MF_GRAYED : 0), ID_RECENT_BASE + (UINT)k, w.c_str());
     }
     if (!v.empty()) { AppendMenuW(m, MF_SEPARATOR, 0, nullptr); AppendMenuW(m, MF_STRING, ID_RECENT_CLEAR, L"목록 비우기"); }
     RECT r; GetWindowRect(anchor, &r);
-    int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, g_hwnd, nullptr);
+    int cmd = TrackBtnMenu(m, clickBtn, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom);
     DestroyMenu(m);
     if (cmd == ID_RECENT_CLEAR) { SaveRecent({}); SetStatus(L"최근 파일 목록을 비웠습니다."); }
     else if (cmd >= ID_RECENT_BASE && cmd < ID_RECENT_BASE + (int)v.size()) {
         wstring path = v[cmd - ID_RECENT_BASE];
         if (FileExists(path)) LoadFile(path);
-        else {
-            wstring msg = L"최근 파일의 원래 위치를 확인할 수 없습니다.\n\n" + path +
-                L"\n\n파일이 이동했거나 외장 드라이브·네트워크가 연결되지 않았을 수 있습니다.\n"
-                L"새 위치에서 파일을 고르시겠습니까? (기존 목록은 그대로 유지됩니다.)";
-            if (MessageBoxW(g_hwnd, msg.c_str(), L"최근 파일 위치 확인", MB_YESNO | MB_ICONQUESTION) == IDYES)
-                PostMessageW(g_hwnd, WM_COMMAND, MAKEWPARAM(ID_OPEN, BN_CLICKED), 0);
-        }
+        else SetStatus(L"파일을 찾을 수 없습니다: " + FileName(path));  // 메뉴를 연 뒤에 옮겨진 경우
     }
 }
 
+static HWND g_rpWnd;  // 찾기·바꾸기 창
+static void RpPlaceCenter(HWND w);
 // 전체 화면 (읽기 모드)
 static WINDOWPLACEMENT g_wpBeforeFull = {sizeof(WINDOWPLACEMENT)};
 static LONG g_styleBeforeFull = 0;
@@ -3684,6 +3713,7 @@ static void SetFullscreen(bool on) {
     Layout();
     InvalidateRect(g_hwnd, nullptr, TRUE);
     for (HWND b : {g_btnToc, g_btnFind, g_btnMark, g_btnFull}) InvalidateRect(b, nullptr, FALSE);  // 놓인 곳에 따라 바탕색이 다름
+    if (g_rpWnd) RpPlaceCenter(g_rpWnd);  // 찾기·바꾸기 창이 열려 있으면 바뀐 화면의 가운데로
     SetFocus(g_dst);
 }
 // 글자 크기 한 단계 (Ctrl+휠, Ctrl + / -)
@@ -4595,11 +4625,21 @@ static void DrawButton(const DRAWITEMSTRUCT* d) {
             }
         }
     } else {
-        bool primary = id == ID_SAVE || id == ID_ABOUT_OK || id == ID_BW_START || id == ID_RP_NEXT || id == ID_RL_OK;
+        bool primary = id == ID_SAVE || id == ID_ABOUT_OK || id == ID_BW_START || id == ID_RL_OK;
+        bool defBtn = id == ID_RP_NEXT;  // 찾기 창의 기본 단추(Enter): 색 채움 없이 조금 두꺼운 테두리로만 표시
         {
             Graphics g(dc);
             g.SetSmoothingMode(SmoothingModeAntiAlias);
-            if (primary) {
+            if (defBtn) {
+                COLORREF c = down ? col::btnDown : hover ? col::hover : col::btnFill;
+                FillRound(g, r, S(6), c);
+                REAL t = 1.8f * (REAL)g_dpi / 96.0f, hft = t / 2;
+                GraphicsPath path;
+                RoundPath(path, hft, hft, (REAL)w - t, (REAL)hh - t, (REAL)S(6) - hft);
+                auto mid = [](COLORREF x, COLORREF y) { return RGB((GetRValue(x) + GetRValue(y)) / 2, (GetGValue(x) + GetGValue(y)) / 2, (GetBValue(x) + GetBValue(y)) / 2); };
+                Pen pen(GC(disabled ? col::border : hover ? col::sub : mid(col::border, col::sub)), t);
+                g.DrawPath(&pen, &path);
+            } else if (primary) {
                 COLORREF c = disabled ? col::accentDis : down ? col::accentDown : hover ? col::accentHover : col::accent;
                 FillRound(g, r, S(6), c);
             } else {
@@ -5283,7 +5323,6 @@ static void OptionChanged() {
 
 // ---------------------------------------------------------------------------
 // 바꾸기·지우기 목록 창 (규칙 = 정리할 때마다 자동으로 적용)
-static HWND g_rpWnd;  // 찾기·바꾸기 창
 static HWND g_rulesWnd, g_rlList, g_rlFind, g_rlRepl, g_rlRegex, g_rlLine, g_rlInfo;
 static std::vector<RuleItem> g_rlItems;
 static std::vector<wstring> g_rlComments;  // 목록 파일의 설명 줄 (저장할 때 그대로 남김)
@@ -5986,8 +6025,8 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (code == CBN_DROPDOWN) HideTip();  // 펼친 목록 위에 풍선 도움말이 겹치지 않게
         switch (id) {
         case ID_OPEN: DoOpen(); AfterTextChange(); return 0;
-        case ID_RECENT: ShowRecentMenu(g_btnOpen); AfterTextChange(); return 0;
-        case ID_THEME: ShowThemeMenu(g_btnTheme); return 0;
+        case ID_RECENT: if (SwallowMenuReclick((HWND)lp)) return 0; ShowRecentMenu(g_btnOpen, g_btnRecent); AfterTextChange(); return 0;
+        case ID_THEME: if (SwallowMenuReclick((HWND)lp)) return 0; ShowThemeMenu(g_btnTheme); return 0;
         case ID_SAVE: DoSave(); return 0;
         case ID_SAVEAS: if (!g_text.empty()) DoSaveAs(); return 0;
         case ID_BATCH: DoBatchDialog(); AfterTextChange(); return 0;
@@ -5995,10 +6034,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_CLEAR: ClearAll(); return 0;
         case ID_COPYALL: CopyResult(); return 0;
         case ID_READ: SetReading(true); return 0;
-        case ID_RTOC: if (g_reading) ShowTocMenu(g_btnToc); return 0;
+        case ID_RTOC: if (SwallowMenuReclick((HWND)lp)) return 0; if (g_reading) ShowTocMenu(g_btnToc); return 0;
         case ID_RFIND: OpenReplace(); return 0;  // 정리·읽기 모드 모두 같은 찾기·바꾸기 창
         case ID_REPLACE: OpenReplace(); return 0;
-        case ID_RMARK: if (g_reading) ShowMarkMenu(g_btnMark); return 0;
+        case ID_RMARK: if (SwallowMenuReclick((HWND)lp)) return 0; if (g_reading) ShowMarkMenu(g_btnMark); return 0;
         case ID_MARK_ADD: AddMark(); return 0;
         case ID_RFULL: SetFullscreen(!g_fullscreen); return 0;
         case ID_SIZE_UP: if (g_reading) StepFontSize(1); return 0;

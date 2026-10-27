@@ -15,6 +15,7 @@ src = (root / "src/main.cpp").read_text(encoding="utf-8")
 names = [
     "RecentEncodePath", "RecentDecodePath", "RecentIniValue", "LoadRecent",
     "SaveRecent", "RecentMaskedNameMatch", "RecoverDamagedRecentPath", "AddRecent",
+    "MenuText",
 ]
 
 def extract(name):
@@ -49,6 +50,10 @@ static const int kMaxRecent = 20;
 static bool FileExists(const wstring& p) {
     DWORD a=GetFileAttributesW(p.c_str());
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+static wstring FileName(const wstring& p) {
+    size_t s = p.find_last_of(L"\\/");
+    return s == wstring::npos ? p : p.substr(s + 1);
 }
 static void MakeFile(const wstring& p) {
     HANDLE h=CreateFileW(p.c_str(),GENERIC_WRITE,0,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
@@ -107,6 +112,26 @@ int wmain() {
     const auto promoted=LoadRecent();
     assert(promoted.size()==3 && promoted[0]==mix && promoted[1]==another && promoted[2]==cjk);
 
+    // Recent-menu labels: the file title is shown exactly ('&' must be doubled,
+    // not replaced) for CJK, Hangul, emoji and Latin names.
+    const wstring amp=dir+L"Tom & Jerry_外伝_한글_😃.txt";
+    MakeFile(amp);
+    AddRecent(amp);
+    const auto withAmp=LoadRecent();
+    assert(withAmp[0]==amp && FileName(withAmp[0])==L"Tom & Jerry_外伝_한글_😃.txt");
+    assert(MenuText(FileName(withAmp[0]))==L"Tom && Jerry_外伝_한글_😃.txt");
+    assert(MenuText(FileName(another))==L"汉字_あいう_한글_😃.txt");
+    assert(MenuText(L"a\tb")==L"a b");
+    {   // The menu stores the label unchanged; Windows draws '&&' as one '&'.
+        HMENU m=CreatePopupMenu();
+        const wstring label=MenuText(FileName(amp));
+        assert(AppendMenuW(m,MF_STRING|MF_GRAYED,1,label.c_str()));
+        wchar_t got[512]={};
+        assert(GetMenuStringW(m,1,got,512,MF_BYCOMMAND)==(int)label.size() && label==got);
+        DestroyMenu(m);
+    }
+    DeleteFileW(amp.c_str());
+
     // A damaged name is recoverable only if exactly one file can match.
     const wstring similar=dir+L"龙虎龙.txt";
     MakeFile(similar);
@@ -134,7 +159,9 @@ int wmain() {
     DeleteFileW(another.c_str());DeleteFileW(similar.c_str());
     RemoveDirectoryW(dir.c_str());
     std::cout<<"PASS native Windows ANSI-INI Unicode persistence, 4 scripts, emoji,"
-             <<" reopen, long entry, unique/ambiguous legacy recovery, settings preservation\n";
+             <<" reopen, long entry, unique/ambiguous legacy recovery, settings preservation,"
+             <<" menu titles with &\n";
+    return 0;
 }
 """
 with tempfile.TemporaryDirectory() as td:
@@ -143,6 +170,6 @@ with tempfile.TemporaryDirectory() as td:
     exe = work / "recent_test.exe"
     source.write_text(cpp, encoding="utf-8")
     subprocess.run(
-        ["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", str(source), "/Fe:"+str(exe)],
+        ["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", str(source), "/Fe:"+str(exe), "user32.lib"],
         cwd=work, check=True, timeout=100)
     subprocess.run([str(exe)], cwd=work, check=True, timeout=100)

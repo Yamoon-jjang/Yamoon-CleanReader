@@ -404,6 +404,27 @@ static void RpAddRule() {
     RpInfo(L"규칙으로 저장했습니다. 이 글과 앞으로 정리하는 모든 글에 자동으로 적용됩니다.");
     OptionChanged();
 }
+// 찾기·바꾸기 창이 놓일 수 있는 화면 영역 (창이 있는 모니터 기준, 전체 화면이면 모니터 전체)
+static RECT RpScreenArea() {
+    MONITORINFO mi = {sizeof(mi)};
+    GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+    return g_fullscreen ? mi.rcMonitor : mi.rcWork;
+}
+// 찾기·바꾸기 창을 프로그램 창(전체 화면이면 화면) 가운데에 놓음
+static void RpPlaceCenter(HWND w) {
+    if (!w || !g_hwnd) return;
+    RECT wr; GetWindowRect(w, &wr);
+    RECT mr; GetClientRect(g_hwnd, &mr);
+    MapWindowPoints(g_hwnd, nullptr, (POINT*)&mr, 2);
+    int ww = wr.right - wr.left, wh = wr.bottom - wr.top;
+    int x = mr.left + (mr.right - mr.left - ww) / 2, y = mr.top + (mr.bottom - mr.top - wh) / 2;
+    RECT wa = RpScreenArea();
+    if (x + ww > wa.right) x = wa.right - ww;
+    if (x < wa.left) x = wa.left;
+    if (y + wh > wa.bottom) y = wa.bottom - wh;
+    if (y < wa.top) y = wa.top;
+    SetWindowPos(w, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
 static RECT g_rpOptBox;  // 옵션 묶음 테두리
 static void RpLayout(HWND h) {
     RECT rc; GetClientRect(h, &rc);
@@ -455,7 +476,7 @@ static void RpSetExpanded(HWND h, bool on) {
     RECT cr = {0, 0, 10, RpClientH(on)};
     AdjustWindowRectEx(&cr, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE, (DWORD)GetWindowLongW(h, GWL_EXSTYLE));
     int nh = cr.bottom - cr.top, ny = wr.top;
-    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    RECT wa = RpScreenArea();
     if (ny + nh > wa.bottom) ny = std::max<int>(wa.top, wa.bottom - nh);  // 화면 아래로 넘치지 않게
     SetWindowPos(h, nullptr, wr.left, ny, wr.right - wr.left, nh, SWP_NOZORDER);
     RpLayout(h);
@@ -672,15 +693,10 @@ static void OpenReplace() {
         DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
         RECT cr = {0, 0, S(560), RpClientH(false)};
         AdjustWindowRectEx(&cr, style, FALSE, WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW);
-        RECT dr; GetWindowRect(g_dst, &dr);  // 글 칸 위 오른쪽에 띄움
         int w = cr.right - cr.left, hh = cr.bottom - cr.top;
-        int x = dr.right - w - S(24), y = dr.top + S(8);
-        RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-        if (x < wa.left) x = wa.left;
-        if (y + hh > wa.bottom) y = wa.bottom - hh;
-        if (y < wa.top) y = wa.top;
-        HWND rw = CreateWindowExW(WS_EX_DLGMODALFRAME, L"YamoonReplace", L"찾기·바꾸기", style, x, y, w, hh, g_hwnd, nullptr, g_hInst, nullptr);
+        HWND rw = CreateWindowExW(WS_EX_DLGMODALFRAME, L"YamoonReplace", L"찾기·바꾸기", style, 0, 0, w, hh, g_hwnd, nullptr, g_hInst, nullptr);
         if (!rw) return;
+        RpPlaceCenter(rw);  // 프로그램 창(전체 화면이면 화면) 가운데
         SetClassLongPtrW(rw, GCLP_HBRBACKGROUND, (LONG_PTR)g_brPanel);
         ApplyTitleBar(rw, true);  // 글 칸과 구분되게 테두리를 강조색으로
         ShowWindow(rw, SW_SHOW);
