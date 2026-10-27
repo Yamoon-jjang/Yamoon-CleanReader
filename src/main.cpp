@@ -379,6 +379,9 @@ static bool TomInsert(ITextDocument* doc, long pos, const std::wstring& s) {
     r->Release();
     return ok;
 }
+// 이보다 긴 글은 글꼴 지정을 되돌리거나 자동 글꼴로 다시 넣지 않음: 글 전체를 다시 다루는 일이 수십 초씩 걸려 창이 멈출 수 있음.
+// (그럴 때는 이미 들어간 일반 글을 그대로 둠. 드물게 몇 글자가 네모로 보일 수 있지만 멈추지 않음)
+static const long kHugeRich = 600000;
 // 글꼴에 없는 글자에만 그 글자가 있는 글꼴을 직접 지정 (글자는 그대로, 화면 표시만).
 // 제로폭 같은 보이지 않는 문자와 한글은 원래 글꼴에 그대로 남겨, Windows 자동 글꼴 바꿈이 앞뒤 글자를 보고 잘못 고르는 일을 막음.
 // 글 칸이 부분 글꼴 지정을 받지 않으면(다른 글자 글꼴까지 바뀌면) 되돌리고 false
@@ -416,6 +419,7 @@ static bool ApplyGlyphFallback(HWND h) {
         i += len - 1;
     }
     if (runs.empty()) return true;
+    const bool huge = (long)t.size() > kHugeRich;
     // 열리는 파일의 크기·PC 속도를 미리 알 수 없으므로 개수가 아니라 실제 걸리는 시간으로 정함:
     // 처음 64개를 지정한 속도로 전체 시간을 어림해 1.5초를 넘을 것 같으면, 또는 실제로 2초를 넘으면 되돌리고 자동 글꼴 바꿈에 맡김
     // (첫 묶음은 대신 그릴 글꼴을 처음 불러오는 시간이 섞이므로 그다음부터 잼)
@@ -426,6 +430,12 @@ static bool ApplyGlyphFallback(HWND h) {
     CHARFORMAT2W cf = {};
     cf.cbSize = sizeof(cf);
     cf.dwMask = CFM_FACE | CFM_CHARSET;
+    auto revertAll = [&]() {  // 실패: 글 전체를 원래 글꼴로 (큰 글은 하지 않음 — 부르는 쪽이 그대로 두거나 새 칸으로 바꿈)
+        if (huge) return;
+        lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);
+        cf.bCharSet = lf.lfCharSet;
+        SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+    };
     ITextDocument* doc = TomDocOf(h);  // 선택 없이 지정 (글 뒤쪽 묶음도 바로)
     struct DocRel { ITextDocument* d; ~DocRel() { if (d) d->Release(); } } docRel{doc};
     RoUnlock unlock(h);
@@ -435,21 +445,14 @@ static bool ApplyGlyphFallback(HWND h) {
         cf.bCharSet = kFallbackFonts[runs[r].font].charset;
         if (!TomSetFace(doc, runs[r].a, runs[r].b, kFallbackFonts[runs[r].font].face)) {
             // 선택해서 지정: 글 뒤쪽을 선택하면 그 자리까지 줄 나눔을 다 하느라 멈출 수 있으므로, 앞쪽(20만 자 안)만
-            if (runs[r].a > 200000) {
-                lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);
-                cf.bCharSet = lf.lfCharSet;
-                SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
-                return false;
-            }
+            if (runs[r].a > 200000) { revertAll(); return false; }
             CHARRANGE cr = {runs[r].a, runs[r].b};
             SendMessageW(h, EM_EXSETSEL, 0, (LPARAM)&cr);
             SendMessageW(h, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
         }
         // (큰 글은 뒤쪽 묶음 하나가 몇 초씩 걸릴 수 있어 2초 넘음은 묶음마다 확인)
         if ((r == 64 && elapsedMs() / 64.0 * (double)(runs.size() - 1) > 1500.0) || (r > 0 && elapsedMs() > 2000.0)) {
-            lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);  // 너무 오래 걸림: 되돌림
-            cf.bCharSet = lf.lfCharSet;
-            SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+            revertAll();  // 너무 오래 걸림: 되돌림
             return false;
         }
         if (r == 0) {  // 첫 지정 뒤 확인: 대상 글자는 바뀌고, 다른 글자는 그대로여야 함 (아니면 이 글 칸은 부분 지정을 못 함)
@@ -465,12 +468,7 @@ static bool ApplyGlyphFallback(HWND h) {
             };
             bool runOk = lstrcmpiW(faceAt(runs[0].a).c_str(), kFallbackFonts[runs[0].font].face) == 0;
             bool restOk = probe < 0 || lstrcmpiW(faceAt(probe).c_str(), kFallbackFonts[runs[0].font].face) != 0;
-            if (!runOk || !restOk) {
-                lstrcpynW(cf.szFaceName, lf.lfFaceName, LF_FACESIZE);  // 되돌림
-                cf.bCharSet = lf.lfCharSet;
-                SendMessageW(h, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
-                return false;
-            }
+            if (!runOk || !restOk) { revertAll(); return false; }  // 되돌림
             QueryPerformanceCounter(&q0);  // 시간은 여기서부터 잼
         }
     }
@@ -1347,6 +1345,7 @@ static DWORD CALLBACK RtfReadCb(DWORD_PTR ck, LPBYTE buf, LONG n, LONG* got) {
     *got = (LONG)m;
     return 0;
 }
+static bool g_rtfAltered = false;  // 마지막 한 번에 넣기에서 글 칸이 일부 글자를 표시만 바꿈 (예: U+FFFD → 빈칸)
 static bool g_rtfIn[2];  // 0 원본 칸, 1 결과 칸: 다른 글꼴이 섞인 글을 한 번에 넣기로 열었는지
 // 글 칸의 글자 하나에 들어간 글꼴 이름을, 선택(커서)을 옮기지 않고 알아냄 (글 칸의 문서 개체 TOM 사용).
 // 선택을 옮기면 글 칸이 커서 자리를 정하려고 글 처음부터 그 자리까지 줄 나눔을 그 자리에서 다 해서,
@@ -1378,6 +1377,7 @@ static bool FaceAtNoSel(HWND h, long pos, std::wstring& face) {
 }
 // h: 실패해서 비울 때 긴 글이면 새 칸으로 바꾸므로, 부르는 쪽의 칸 핸들도 함께 바뀜
 static bool InsertGlyphRtf(HWND& h, const wstring& ins) {
+    g_rtfAltered = false;
     HFONT bf = EditFontOf(h);
     if (!bf) return false;
     LOGFONTW lf = {};
@@ -1531,7 +1531,16 @@ static bool InsertGlyphRtf(HWND& h, const wstring& ins) {
                 MEAS_MARK(L"   └ RTF가 빠뜨린 글자 " + std::to_wstring(miss.size()) + L"곳 채우기" + (ok ? L"" : L" (못 함)"));
             }
         }
-        if (got != expect) return undo();
+        if (got != expect) {
+            // 글 칸이 받지 않는 글자(예: 깨진 글자 U+FFFD)는 어떤 방법으로 넣어도 빈칸 등으로 바뀜.
+            // 길이가 같고 바뀐 곳이 적으면 받아들임: 화면만 다르고, 원래 글자는 부르는 쪽이 따로 들고 있다가 저장·복사·찾기에 씀
+            size_t diff = 0;
+            if (got.size() == expect.size())
+                for (size_t k = 0; k < got.size() && diff <= 4096; ++k) if (got[k] != expect[k]) ++diff;
+            if (got.size() != expect.size() || diff > 4096) return undo();
+            g_rtfAltered = true;
+            MEAS_MARK(L"   └ 글 칸이 표시만 바꾼 글자 " + std::to_wstring(diff) + L"곳: 원래 글자는 따로 보관");
+        }
     }
     MEAS_MARK(L"   └ 넣은 글이 원본과 같은지 확인 (" + meas::Num((long long)expect.size()) + L"자)");
     auto fmtAt = [&](long pos) {
@@ -1623,6 +1632,10 @@ static void SetRichText(HWND h, const wstring& s) {
         g_syncing = os;
     }
     if (needFb) MEAS_MARK(mp + L"서식(RTF) 방식으로 글 넣기" + (rtfDone ? wstring() : wstring(L" (실패)")));
+    if (rtfDone && g_rtfAltered && dm && !dm->on) {  // 화면 글자가 원래 글과 다름: 원래 글을 따로 들고 있음 (저장·복사·찾기는 원래 글자)
+        wstring cur = RawRichText(h);
+        if (cur.size() == s.size()) { dm->on = true; dm->orig = s; dm->disp = cur; dm->stash.clear(); }
+    }
     if (!rtfDone) SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)(dm && dm->on ? disp.c_str() : s.c_str()));
     if (!rtfDone) MEAS_MARK(mp + L"글 넣기 (" + meas::Num((long long)s.size()) + L"자)");
     if (dm && dm->on) {  // 칸이 글을 바꿔 넣었으면: 길이가 같으면 표시 글만 맞추고, 다르면 바꿈 없이 원래 글을 넣음
@@ -1640,7 +1653,7 @@ static void SetRichText(HWND h, const wstring& s) {
     if (needFb && !rtfDone) {
         // (한 번에 넣기를 못 했을 때) 없는 글자 묶음마다 글꼴을 지정. 이것도 못 하면 Windows 자동 글꼴 바꿈으로 다시 넣음
         bool os = g_syncing; g_syncing = true;
-        if (!ApplyGlyphFallback(h)) {
+        if (!ApplyGlyphFallback(h) && RichLen(h) <= kHugeRich) {  // 큰 글은 이미 들어간 일반 글을 그대로 둠 (다시 넣으면 멈출 수 있음)
             std::wstring cur = RawRichText(h);
             MEAS_MARK(mp + L"없는 글자에 글꼴 하나씩 지정 (못 함)");
             // 묶음마다 지정도 못 했으면 Windows 자동 글꼴 바꿈으로 다시 넣음
@@ -1703,7 +1716,7 @@ static void RecolorEdit(HWND h) {
     if (!InsertGlyphRtf(h, cur)) {  // (드묾) 못 넣으면 여는 때와 같은 차례로
         g_rtfIn[h == g_dst ? 1 : 0] = false;
         SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)cur.c_str());
-        if (!ApplyGlyphFallback(h)) {
+        if (!ApplyGlyphFallback(h) && RichLen(h) <= kHugeRich) {
             SetAutoFont(h, true);
             SendMessageW(h, EM_SETTEXTEX, (WPARAM)&st, (LPARAM)cur.c_str());
         }
