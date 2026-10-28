@@ -42,11 +42,18 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # v2.4.4 source for the old-vs-new encoding comparison
       - name: Native Windows Unicode recent-file INI regression
         shell: cmd
         run: |
           call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           python tests/check_recent_windows.py
+      - name: Native Windows encoding detection (v2.4.4 vs now)
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          python tests/check_encoding_windows.py
 
   build:
     needs: [search-regression, recent-windows]

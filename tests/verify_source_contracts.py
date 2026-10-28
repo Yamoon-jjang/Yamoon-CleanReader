@@ -38,6 +38,12 @@ assert "RpPlaceCenter(rw)" in search and "if (g_rpWnd) RpPlaceCenter(g_rpWnd)" i
 assert "id == ID_RP_NEXT || id == ID_RL_OK" not in main      # [찾기] 단추는 색 채움 없음
 assert "u16:" in main and "RecoverDamagedRecentPath" in main
 assert "kMixQuoteSpan" in engine  # do not alter long-standing text rules
+# v2.4.4 same-version redeploy: every match highlighted (visible range only), encodings
+assert "static void RpMarkTick()" in search and "SetTimer(h, 8, 60, nullptr)" in search and "KillTimer(h, 8)" in search
+assert "doc->Undo(tomSuspend, nullptr)" in search and "tomAutoColor" in search   # not in undo, back to automatic
+assert search.count("RpMarkClear();") >= 4                                      # before every text change + on close
+assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" in main
+assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 
 # Confirm the engine still has the exact pre-optimization blob, not just a
 # superficially similar output for a few sample novels.

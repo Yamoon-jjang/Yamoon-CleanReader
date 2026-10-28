@@ -3,6 +3,7 @@
 # 야문 클린리더
 
 > **v2.4.4 사용 편의 보완**: 최근 파일 목록에서 옮겨지거나 지워진 파일을 회색으로 표시하고(`[위치 확인]` 문구 삭제), 목록 제목의 `&`가 `+`로 보이던 문제를 고쳤습니다. 목차 아이콘을 다시 누르면 목차가 닫히고, 찾기·바꾸기 창은 화면 가운데(전체 화면 포함)에 뜨며 [찾기] 단추는 색 채움 대신 조금 두꺼운 테두리로 표시합니다. 문단 정리 결과와 읽기 모드 속도는 v2.4.3과 같습니다.
+> 같은 버전 재배포 보완: 찾은 곳을 **모두 바탕색으로 표시**(지금 고른 곳 파랑, 나머지 노랑, 어두운 배색에 맞춘 색)하고, Notepad++에서는 보이는데 클린리더에서 깨지던 **중국어·일본어 파일**(EUC-JP, GB18030 기호, Big5 확장 글자, 잘린 UTF-8, BOM 없는 UTF-16)을 바르게 엽니다.
 
 
 **정리하고, 바로 읽는다.**
@@ -69,8 +70,8 @@
 | 언어 | 문장 나누기 | 대사 · 따옴표 | 옛 인코딩 자동 판별 |
 |---|---|---|---|
 | **한국어** | 어미 · 조사까지 보는 전용 규칙 | `" "` `' '` `「 」` `『 』` · 여러 줄 대사 | CP949(EUC-KR) · 조합형 |
-| **중국어** (간체 · 번체) | 띄어쓰기 없는 `。！？`, 반각 `. ! ?` | `“ ”` `「 」` · 대사 뒤 서술은 붙여 둠 | GBK · Big5 |
-| **일본어** | 띄어쓰기 없는 `。！？`, `。。。` 말줄임은 그대로 | `「 」` `『 』` | Shift-JIS |
+| **중국어** (간체 · 번체) | 띄어쓰기 없는 `。！？`, 반각 `. ! ?` | `“ ”` `「 」` · 대사 뒤 서술은 붙여 둠 | GBK · GB18030 · Big5 |
+| **일본어** | 띄어쓰기 없는 `。！？`, `。。。` 말줄임은 그대로 | `「 」` `『 』` | Shift-JIS · EUC-JP |
 | **영어** | `Mr.` `a.m.` `U.S.A.` `Jan. 3` 같은 약어 구별 | `" "` `' '` · `"Yes." It was…` 다음 문장 구분 | Windows-1252 |
 | **프랑스어 · 독일어 · 스페인어 · 이탈리아어 · 포르투갈어** | 각국 약어 · 날짜(`am 3. Oktober`) 구별 | `« »` `„ “` `»…«` · 스페인식 `—¿…? —preguntó—` | Windows-1252 |
 | **폴란드어 · 체코어 · 헝가리어 · 터키어 · 발트어** | `Np.` `godz. 5` 같은 약어 구별 | `„ “` · 줄표 `—` 대사 | Windows-1250 · 1254 · 1257 |
@@ -127,7 +128,7 @@
 - 쪽 번호 · 반복 머리글 · 광고 · 주소 줄 · HTML 찌꺼기 제거, 사용자 규칙(정규식 포함)
 
 **파일**
-- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · GBK/GB2312 · Big5 · Windows-1250~1258 · KOI8-R · Windows-874 — 저장할 때도 같은 인코딩으로
+- 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · EUC-JP · GBK/GB2312/GB18030 · Big5 · Windows-1250~1258 · KOI8-R · Windows-874 — 저장할 때도 같은 인코딩으로
 - 확장자가 아니라 **파일 내용으로** 텍스트인지 확인 (옛 `.cap` 파일도 열림)
 - **EPUB 전자책** — 본문 글을 차례대로 꺼내 정리 · 읽기 (DRM이 걸린 책 제외, 추가 프로그램 없이 직접 처리)
 - 최대 100MB, 여러 파일 한꺼번에 변환, 원본은 그대로 두고 `_정리.txt`로 따로 저장
@@ -182,7 +183,7 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Korean-specific fixes** — joins decomposed jamo (NFD text from macOS), restores text spaced out letter by letter, removes Hanja in parentheses, converts full-width to half-width
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
 - **Multilingual** — the script of each paragraph is detected first, then the matching rules are applied: Chinese and Japanese sentences without spaces (`。！？`), abbreviations in English and European languages (`Mr.`, `p. m.`, `Np.`, `т.е.`), quotes such as `« »`, `„ “`, `»…«` and dash dialogue (`— Да! — сказал он.`), plus Greek `;`, Arabic `؟`, Hindi `।` and Burmese `။`; Thai line breaks are kept. Mixed-language files work, and Korean results are unaffected
-- **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, GBK, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
+- **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, EUC-JP, GBK/GB18030, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
 - **Reading mode** — click or Space to turn pages, remembers your reading position and the window position and size, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
 
