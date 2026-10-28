@@ -239,6 +239,113 @@ static bool RpSearchCached(wstring& err) {
     return g_rpCacheOk;
 }
 static void RpInfo(const wstring& s) { SetWindowTextW(g_rpInfo, s.c_str()); }
+// ---------------------------------------------------------------------------
+// 찾은 곳 모두 표시: 지금 고른 곳은 파란 바탕, 나머지는 노란 바탕 (어두운 배색은 어두운 황토·진한 파랑)
+// 글 전체를 칠하지 않고 화면에 보이는 부분(앞뒤 한 화면 여유)만 칠함 — 큰 글에서 찾은 곳이 수만 곳이어도
+// 걸리는 시간이 같음. 찾기 창이 열려 있는 동안 짧은 간격으로 보이는 범위·글·찾은 결과·고른 곳·배색을 확인해
+// 달라졌을 때만 다시 칠함 (창 크기·전체 화면·글자 크기·줄 간격·쪽 넘김·휠·목차 이동 모두 같은 방식).
+// 색은 화면 표시일 뿐: 저장하는 글에는 들어가지 않고, 되돌리기(Ctrl+Z) 기록에도 남기지 않음.
+static long g_rpMarkLo = -1, g_rpMarkHi = -1;   // 지금 칠해 둔 범위 (이 안의 바탕색만 바꿈)
+static unsigned long long g_rpMarkSerial = 0;
+static size_t g_rpMarkCount = 0;
+static LONG g_rpMarkSelA = -1, g_rpMarkSelB = -1;
+static COLORREF g_rpMarkCur = 0, g_rpMarkOther = 0;
+static bool g_rpSelHidden = false;
+static HWND g_rpMarkWnd = nullptr;   // 칠한 글 칸 (모드를 바꾸며 글 칸이 새로 만들어지면 지난 상태는 버림)
+static void RpMarkFollowWnd() {
+    if (g_rpMarkWnd == g_dst) return;
+    g_rpMarkWnd = g_dst; g_rpMarkLo = g_rpMarkHi = -1; g_rpSelHidden = false; g_rpMarkCount = 0; g_rpMarkSelA = g_rpMarkSelB = -1;
+}
+static const size_t kRpMarkMax = 2000;  // 한 번에 칠하는 곳 수의 상한 (한 글자 찾기처럼 화면에 아주 많을 때)
+static void RpMarkColors(COLORREF& other, COLORREF& cur) {
+    COLORREF fg, bg;
+    if (g_reading) ViewColors(fg, bg); else { fg = col::editText; bg = col::editBg; }
+    double lum = (0.299 * GetRValue(bg) + 0.587 * GetGValue(bg) + 0.114 * GetBValue(bg)) / 255.0;
+    if (lum < 0.45) { other = RGB(102, 82, 22); cur = RGB(30, 80, 200); }   // 어두운 배색: 글자색은 그대로 두고 읽히는 어두운 색
+    else { other = RGB(255, 232, 120); cur = RGB(110, 170, 255); }        // 밝은 배색: 노랑 · 파랑
+}
+static bool RpSetBack(ITextDocument* doc, long a, long b, long color) {
+    ITextRange* r = nullptr;
+    if (FAILED(doc->Range(a, b, &r)) || !r) return false;
+    bool ok = false;
+    ITextFont* f = nullptr;
+    if (SUCCEEDED(r->GetFont(&f)) && f) { ok = SUCCEEDED(f->SetBackColor(color)); f->Release(); }
+    r->Release();
+    return ok;
+}
+static void RpShowSel(bool show) {  // 지금 고른 곳이 찾은 곳이면 선택 표시 대신 파란 바탕이 보이게
+    if (g_rpSelHidden == !show || !g_dst) return;
+    SendMessageW(g_dst, EM_HIDESELECTION, show ? FALSE : TRUE, 0);
+    g_rpSelHidden = !show;
+}
+// 칠해 둔 범위를 원래 바탕(자동)으로. 글에 다른 바탕색은 없으므로 범위가 조금 어긋나도(글을 고친 뒤) 해가 없음
+static void RpMarkPaint(long lo, long hi, const std::vector<RpHit>* hits, LONG selA, LONG selB, COLORREF other, COLORREF cur) {
+    ITextDocument* doc = TomDocOf(g_dst);
+    if (!doc) return;
+    bool ol = g_loading, os = g_syncing;
+    g_loading = true; g_syncing = true;  // 바뀜·선택 알림 무시 (글은 그대로)
+    {
+        RoUnlock unlock(g_dst);
+        doc->Undo(tomSuspend, nullptr);
+        if (g_rpMarkLo >= 0) RpSetBack(doc, g_rpMarkLo, g_rpMarkHi, tomAutoColor);
+        g_rpMarkLo = g_rpMarkHi = -1;
+        if (hits) {
+            size_t i = RpHitFrom(*hits, (size_t)lo), n = 0;
+            // 범위 앞에서 시작해 범위 안으로 들어오는 곳
+            if (i > 0 && (*hits)[i - 1].b > (size_t)lo) --i;
+            for (; i < hits->size() && (*hits)[i].a < (size_t)hi && n < kRpMarkMax; ++i, ++n) {
+                const RpHit& h = (*hits)[i];
+                bool now = (LONG)h.a == selA && (LONG)h.b == selB;
+                RpSetBack(doc, (long)h.a, (long)h.b, (long)(now ? cur : other));
+            }
+            g_rpMarkLo = lo; g_rpMarkHi = hi;
+        }
+        doc->Undo(tomResume, nullptr);
+    }
+    doc->Release();
+    g_loading = ol; g_syncing = os;
+}
+static void RpMarkClear() {
+    RpMarkFollowWnd();
+    if (g_rpMarkLo >= 0) RpMarkPaint(0, 0, nullptr, -1, -1, 0, 0);
+    RpShowSel(true);
+    g_rpMarkCount = 0; g_rpMarkSelA = g_rpMarkSelB = -1;
+}
+static void RpMarkTick() {
+    if (!g_rpWnd || !g_dst) return;
+    RpMarkFollowWnd();
+    // 글이 바뀌었으면(읽기·정리 모드 전환, 다시 정리, 직접 고침) 잠깐(0.3초) 그대로일 때 같은 조건으로 다시 찾아 표시
+    static unsigned long long staleSerial = 0;
+    static DWORD staleSince = 0;
+    if (!g_busy && g_rpCacheValid && g_rpCacheSerial != g_rpTextSerial && !g_text.empty() && !RpGet(g_rpFind, g_rpFindX).empty()) {
+        if (staleSerial != g_rpTextSerial) { staleSerial = g_rpTextSerial; staleSince = GetTickCount(); }
+        else if (GetTickCount() - staleSince >= 300) { wstring err; RpSearchCached(err); }
+    }
+    const bool valid = !g_busy && g_rpCacheValid && g_rpCacheOk && g_rpCacheSerial == g_rpTextSerial && !g_rpCacheHits.empty();
+    if (!valid) { if (g_rpMarkLo >= 0 || g_rpSelHidden) RpMarkClear(); return; }
+    RECT rc; GetClientRect(g_dst, &rc);
+    POINTL p0 = {0, 0}, p1 = {rc.right > 1 ? rc.right - 1 : 0, rc.bottom > 1 ? rc.bottom - 1 : 0};
+    long first = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&p0);
+    long last = (long)SendMessageW(g_dst, EM_CHARFROMPOS, 0, (LPARAM)&p1);
+    if (last < first) std::swap(first, last);
+    CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
+    COLORREF other, cur; RpMarkColors(other, cur);
+    const auto& hits = g_rpCacheHits;
+    // 고른 곳이 찾은 곳인지
+    size_t k = RpHitFrom(hits, (size_t)std::max(0L, cr.cpMin));
+    bool selIsHit = k < hits.size() && (LONG)hits[k].a == cr.cpMin && (LONG)hits[k].b == cr.cpMax;
+    const bool same = g_rpMarkLo >= 0 && first >= g_rpMarkLo && last <= g_rpMarkHi && g_rpMarkSerial == g_rpCacheSerial &&
+                      g_rpMarkCount == hits.size() && g_rpMarkSelA == cr.cpMin && g_rpMarkSelB == cr.cpMax &&
+                      g_rpMarkCur == cur && g_rpMarkOther == other;
+    if (!same) {
+        long span = std::max(800L, last - first);
+        long lo = std::max(0L, first - span), hi = last + span;
+        RpMarkPaint(lo, hi, &hits, cr.cpMin, cr.cpMax, other, cur);
+        g_rpMarkSerial = g_rpCacheSerial; g_rpMarkCount = hits.size();
+        g_rpMarkSelA = cr.cpMin; g_rpMarkSelB = cr.cpMax; g_rpMarkCur = cur; g_rpMarkOther = other;
+    }
+    RpShowSel(!selIsHit);
+}
 // 바꿀 수 있나: 정리 모드는 결과 칸 전체가 보일 때, 읽기 모드는 늘 (글 전체가 보이므로)
 static bool RpEditable() { return !g_busy && !g_text.empty() && (g_reading || !g_preview); }
 // 큰 글을 읽기 모드에서 바꾼 뒤: 저장·정리 모드 표시가 쓰는 정리 결과에도 반영
@@ -286,6 +393,7 @@ static void RpFindIncr() {
     SendMessageW(g_dst, EM_SETSEL, hits[pick].a, hits[pick].b);
     SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
     RpKeepVisible();
+    RpMarkTick();
     RpInfo(std::to_wstring(pick + 1) + L" / " + std::to_wstring(hits.size()) + L"곳");
 }
 static bool RpFindNext(bool quiet = false) {
@@ -311,6 +419,7 @@ static bool RpFindNext(bool quiet = false) {
     SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);
     SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
     RpKeepVisible();
+    RpMarkTick();
     if (!quiet || wrapped)
         RpInfo(std::to_wstring(pick + 1) + L" / " + std::to_wstring(hits.size()) + L"곳" +
                (wrapped ? (up ? L"   (처음까지 찾아서 끝에서부터 다시 찾음)" : L"   (끝까지 찾아서 처음부터 다시 찾음)") : L""));
@@ -326,6 +435,7 @@ static void RpReplaceOne() {
     if (idx < hits.size()) {
         const RpHit& hh = hits[idx];
         if ((LONG)hh.a == cr.cpMin && (LONG)hh.b == cr.cpMax) {  // 지금 고른 곳이 찾은 말이면 바꿈
+            RpMarkClear();  // 바꾼 글이 찾은 곳의 바탕색을 이어받지 않게
             bool ro = (GetWindowLongW(g_dst, GWL_STYLE) & ES_READONLY) != 0;  // 읽기 모드 칸은 잠깐 풀었다가 다시 잠금
             if (ro) SendMessageW(g_dst, EM_SETREADONLY, FALSE, 0);
             const wstring replacement = hh.rep;  // EN_CHANGE 중 검색 캐시가 갱신되어도 유효한 복사본
@@ -352,6 +462,7 @@ static void RpReplaceAll() {
     const auto& hay = g_rpCacheHay;
     const auto& hits = g_rpCacheHits;
     if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return; }
+    RpMarkClear();
     wstring before = GetRichText(g_dst), out;
     out.reserve(hay.size());
     size_t at = 0;
@@ -374,6 +485,7 @@ static void RpReplaceAll() {
 static bool RpUndoAll() {
     if (g_rpUndoAfter.empty()) return false;
     if (GetRichText(g_dst) != g_rpUndoAfter) { g_rpUndoAfter.clear(); g_rpUndoBefore.clear(); return false; }
+    RpMarkClear();
     long top = TopChar(g_dst);
     wstring b = g_rpUndoBefore;
     g_rpUndoAfter.clear(); g_rpUndoBefore.clear();
@@ -595,6 +707,7 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         for (HWND c : {g_rpFind, g_rpRepl}) ApplyCtlTheme(c, L"DarkMode_CFD");
         for (HWND c : {g_rpFindX, g_rpReplX}) ApplyScrollTheme(c);
         RpLayout(h);
+        SetTimer(h, 8, 60, nullptr);  // 찾은 곳 표시: 보이는 범위·글·고른 곳이 바뀌었는지 확인
         return 0;
     }
     case WM_SIZE: RpLayout(h); InvalidateRect(h, nullptr, TRUE); return 0;
@@ -627,6 +740,7 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_TIMER:
         if (wp == 7) { KillTimer(h, 7); if (!g_text.empty()) RpFindIncr(); return 0; }
+        if (wp == 8) { RpMarkTick(); return 0; }
         break;
     case WM_COMMAND: {
         int id = LOWORD(wp);
@@ -666,6 +780,8 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CLOSE: DestroyWindow(h); return 0;
     case WM_DESTROY:
+        KillTimer(h, 8);
+        RpMarkClear();  // 찾은 곳 표시를 모두 지움
         RpSaveState();
         g_rpCacheValid = false;
         wstring().swap(g_rpCacheHay);
