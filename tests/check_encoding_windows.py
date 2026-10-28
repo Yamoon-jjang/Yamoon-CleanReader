@@ -53,6 +53,7 @@ typedef std::u32string U32;
 int wmain(int argc, wchar_t** argv) {
     // argv: in-file out-file ; writes "<enc>\n" + text as UTF-8
     FILE* f = _wfopen(argv[1], L"rb"); std::string b;
+    if (!f) { fwprintf(stderr, L"cannot open %ls\n", argv[1]); return 1; }
     char buf[65536]; size_t k;
     while ((k = fread(buf, 1, sizeof buf, f)) > 0) b.append(buf, k);
     fclose(f);
@@ -65,7 +66,9 @@ int wmain(int argc, wchar_t** argv) {
         else if (c < 0x10000) { out += (char)(0xE0 | (c >> 12)); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
         else { out += (char)(0xF0 | (c >> 18)); out += (char)(0x80 | ((c >> 12) & 0x3F)); out += (char)(0x80 | ((c >> 6) & 0x3F)); out += (char)(0x80 | (c & 0x3F)); }
     }
-    FILE* o = _wfopen(argv[2], L"wb"); fwrite(out.data(), 1, out.size(), o); fclose(o);
+    FILE* o = _wfopen(argv[2], L"wb");
+    if (!o) { fwprintf(stderr, L"cannot write %ls\n", argv[2]); return 1; }
+    fwrite(out.data(), 1, out.size(), o); fclose(o);
     return 0;
 }
 """
@@ -73,12 +76,14 @@ int wmain(int argc, wchar_t** argv) {
 HARNESS = HARNESS.replace("int wmain(int argc, wchar_t** argv) {", "static int one(wchar_t** argv) {") + r"""
 int wmain(int argc, wchar_t** argv) {
     FILE* l = _wfopen(argv[1], L"rb"); std::string s; char buf[65536]; size_t k;
+    if (!l) return 2;
     while ((k = fread(buf, 1, sizeof buf, l)) > 0) s.append(buf, k);
     fclose(l);
     size_t p = 0;
     while (p < s.size()) {
         size_t e = s.find('\n', p); if (e == std::string::npos) e = s.size();
         std::string line = s.substr(p, e - p); p = e + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
         size_t tab = line.find('\t'); if (tab == std::string::npos) continue;
         wstring a(line.begin(), line.begin() + tab), b2(line.begin() + tab + 1, line.end());
         wchar_t* args[3] = {nullptr, (wchar_t*)a.c_str(), (wchar_t*)b2.c_str()};
@@ -194,7 +199,7 @@ def run(cmd, work, cases, tag):
     for name, data, *_ in cases:
         (work / f"{name}.in").write_bytes(data)
         lines.append(f"{work / (name + '.in')}\t{work / (name + '.' + tag)}")
-    lst.write_text("\n".join(lines), encoding="ascii")
+    lst.write_bytes("\n".join(lines).encode("ascii"))   # bytes: text mode on Windows would add \r to each path
     subprocess.run(cmd + [str(lst)], check=True, timeout=600, stderr=subprocess.DEVNULL)
     out = {}
     for name, *_ in cases:
