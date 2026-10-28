@@ -42,6 +42,12 @@ assert "kMixQuoteSpan" in engine  # do not alter long-standing text rules
 assert "static void RpMarkTick()" in search and "SetTimer(h, 8, 60, nullptr)" in search and "KillTimer(h, 8)" in search
 assert "doc->Undo(tomSuspend, nullptr)" in search and "tomAutoColor" in search   # not in undo, back to automatic
 assert search.count("RpMarkClear();") >= 4                                      # before every text change + on close
+# [찾기]로 다음 찾은 곳: 선택 표시를 감춘 채로는 RichEdit가 화면을 옮기지 않으므로 되살리고 직접 옮김
+assert "static void RpGoHit(const RpHit& hh)" in search and search.count("RpGoHit(hits[pick])") == 3
+go = search[search.index("static void RpGoHit("):]
+go = go[:go.index("\n}\n")]
+assert go.index("RpShowSel(true)") < go.index("EM_SETSEL") and "RpReveal(" in go and "RpMarkTick()" in go
+assert "SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);\n    SendMessageW(g_dst, EM_SCROLLCARET" not in search
 assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" in main
 assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 

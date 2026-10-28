@@ -370,6 +370,48 @@ static void RpKeepVisible() {
     if (top < dr.top) top = dr.top;
     SetWindowPos(g_rpWnd, nullptr, wr.left, top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
+// 찾은 곳(a~b)이 글 칸 화면 안에 다 보이는지
+static bool RpOnScreen(long a, long b) {
+    RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
+    const long e = b > a ? b - 1 : a;
+    POINTL pa = {}, pe = {};
+    SendMessageW(g_dst, EM_POSFROMCHAR, (WPARAM)&pa, a);
+    SendMessageW(g_dst, EM_POSFROMCHAR, (WPARAM)&pe, e);
+    int lh = S(20);  // 끝 글자 줄의 높이 (다음 줄 첫 글자와의 거리)
+    long line = (long)SendMessageW(g_dst, EM_EXLINEFROMCHAR, 0, e);
+    long nx = (long)SendMessageW(g_dst, EM_LINEINDEX, line + 1, 0);
+    if (nx > e) {
+        POINTL pn = {}; SendMessageW(g_dst, EM_POSFROMCHAR, (WPARAM)&pn, nx);
+        if (pn.y > pe.y) lh = pn.y - pe.y;
+    }
+    return pa.y >= fr.top && pe.y + lh <= fr.bottom;
+}
+// 화면 밖의 찾은 곳으로 화면(쪽)을 옮김: 찾은 줄이 화면 위에서 1/3쯤에 오게 (앞 문맥이 조금 보이도록)
+static void RpReveal(long a, long b) {
+    if (RpOnScreen(a, b)) return;
+    RECT fr; SendMessageW(g_dst, EM_GETRECT, 0, (LPARAM)&fr);
+    const int room = (fr.bottom - fr.top) / 3;
+    long line = (long)SendMessageW(g_dst, EM_EXLINEFROMCHAR, 0, a);
+    POINTL pa = {}; SendMessageW(g_dst, EM_POSFROMCHAR, (WPARAM)&pa, (long)SendMessageW(g_dst, EM_LINEINDEX, line, 0));
+    long t = line;
+    for (long k = line - 1; k >= 0 && line - k < 400; --k) {
+        POINTL p = {}; SendMessageW(g_dst, EM_POSFROMCHAR, (WPARAM)&p, (long)SendMessageW(g_dst, EM_LINEINDEX, k, 0));
+        if (pa.y - p.y > room) break;
+        t = k;
+    }
+    ScrollToChar(g_dst, (long)SendMessageW(g_dst, EM_LINEINDEX, t, 0));
+}
+// 찾은 곳 하나를 지금 고른 곳으로 만들고 그 자리가 보이게 함.
+// 찾은 곳 모두 표시 중에는 선택 표시를 감춰 두는데(EM_HIDESELECTION), 감춘 동안은 RichEdit가 고른 곳으로
+// 화면을 옮기지 않아 [찾기]를 눌러도 쪽이 넘어가지 않았음 — 선택 표시를 먼저 되살리고 화면은 직접 옮김
+static void RpGoHit(const RpHit& hh) {
+    RpShowSel(true);
+    RpReveal((long)hh.a, (long)hh.b);
+    SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);
+    if (!RpOnScreen((long)hh.a, (long)hh.b)) SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
+    RpKeepVisible();
+    RpMarkTick();  // 새로 고른 곳은 파란 바탕, 앞서 고른 곳은 노란 바탕으로 (선택 표시는 다시 감춤)
+}
 static void RpRemember(HWND combo) {  // 찾은 말 기록 (이번에 켠 동안)
     wchar_t buf[1024]; GetWindowTextW(combo, buf, 1024);
     if (!buf[0]) return;
@@ -390,10 +432,7 @@ static void RpFindIncr() {
     CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
     const size_t idx = RpHitFrom(hits, (size_t)std::max(0L, cr.cpMin));
     int pick = idx == hits.size() ? 0 : (int)idx;
-    SendMessageW(g_dst, EM_SETSEL, hits[pick].a, hits[pick].b);
-    SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
-    RpKeepVisible();
-    RpMarkTick();
+    RpGoHit(hits[pick]);
     RpInfo(std::to_wstring(pick + 1) + L" / " + std::to_wstring(hits.size()) + L"곳");
 }
 static bool RpFindNext(bool quiet = false) {
@@ -415,11 +454,7 @@ static bool RpFindNext(bool quiet = false) {
         if (idx == 0) { pick = (int)hits.size() - 1; wrapped = true; }
         else pick = (int)idx - 1;
     }
-    const RpHit& hh = hits[pick];
-    SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);
-    SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
-    RpKeepVisible();
-    RpMarkTick();
+    RpGoHit(hits[pick]);
     if (!quiet || wrapped)
         RpInfo(std::to_wstring(pick + 1) + L" / " + std::to_wstring(hits.size()) + L"곳" +
                (wrapped ? (up ? L"   (처음까지 찾아서 끝에서부터 다시 찾음)" : L"   (끝까지 찾아서 처음부터 다시 찾음)") : L""));
@@ -643,8 +678,7 @@ static void RpRunReplaceAction(bool all) {
             if (hits.empty()) { RpInfo(L"찾는 말이 없습니다."); return; }
             const size_t idx = RpHitFrom(hits, (size_t)std::max(0L, oldSel.cpMin));
             const size_t pick = idx == hits.size() ? 0 : idx;
-            SendMessageW(g_dst, EM_SETSEL, (WPARAM)hits[pick].a, (LPARAM)hits[pick].b);
-            SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
+            RpGoHit(hits[pick]);
             RpRememberBoth();
             RpReplaceOne();
         }
