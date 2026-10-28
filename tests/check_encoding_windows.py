@@ -96,8 +96,10 @@ def build(src_text: str, work: Path, name: str) -> list[str]:
     cpp.write_text(HARNESS.replace("%SRC%", decoding_source(src_text)), encoding="utf-8")
     if os.name == "nt":
         exe = work / f"{name}.exe"
-        subprocess.run(["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/O2", str(cpp), "/Fe:" + str(exe), "user32.lib"],
-                       cwd=work, check=True, stdout=subprocess.DEVNULL)
+        r = subprocess.run(["cl", "/nologo", "/std:c++17", "/EHsc", "/utf-8", "/O2", str(cpp), "/Fe:" + str(exe), "user32.lib"],
+                           cwd=work, capture_output=True, text=True, errors="replace")
+        if r.returncode:
+            raise RuntimeError(f"{name}: cl failed\n" + "\n".join(l for l in r.stdout.splitlines() if "error" in l)[:3000])
         return [str(exe)]
     exe = work / f"{name}.exe"
     subprocess.run(["x86_64-w64-mingw32-g++-win32", "-w", "-O2", "-std=c++17", "-municode", "-static", str(cpp), "-o", str(exe)],
@@ -235,4 +237,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as e:   # GitHub Actions: show the reason as an annotation (job logs may be unreachable)
+        if os.environ.get("GITHUB_ACTIONS"):
+            msg = f"{type(e).__name__}: {e}".replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+            print(f"::error title=encoding test::{msg[:4000]}")
+        raise
