@@ -34,6 +34,7 @@ jobs:
         run: |
           python3 tests/verify_source_contracts.py
           python3 tests/compare_search_242_243.py
+          python3 tests/check_toc_lines.py
 
   recent-windows:
     runs-on: windows-2022
@@ -75,6 +76,7 @@ jobs:
         run: |
           python3 tests/verify_source_contracts.py
           python3 tests/compare_search_242_243.py
+          python3 tests/check_toc_lines.py
       - name: Build YamoonCleanReader.exe
         working-directory: src
         run: |

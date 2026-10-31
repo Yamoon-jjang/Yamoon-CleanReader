@@ -85,7 +85,7 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4.4";
+static const wchar_t* kVersion = L"2.4.5";
 static const wchar_t* kDate = L"2026년 10월 27일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
@@ -3571,7 +3571,8 @@ static bool StartsWithStr(const U32& t, size_t i, const char32_t* w) {
     for (; *w; ++w, ++i) if (i >= t.size() || t[i] != *w) return false;
     return true;
 }
-static bool IsChapterLine(const U32& t, size_t a, size_t b) {
+// v2.4.4까지의 판별 (그대로 둠: 여기서 잡히던 줄은 계속 목차에 들어감)
+static bool IsChapterLineBase(const U32& t, size_t a, size_t b) {
     while (a < b && (t[a] == ' ' || t[a] == 0x3000 || t[a] == '\t' || IsInvisibleCh(t[a]))) ++a;
     while (b > a && (t[b - 1] == ' ' || t[b - 1] == 0x3000 || t[b - 1] == '\t' || IsInvisibleCh(t[b - 1]))) --b;
     if (b <= a || b - a > 40) return false;
@@ -3594,6 +3595,136 @@ static bool IsChapterLine(const U32& t, size_t a, size_t b) {
     if (je && (u == U'장' || u == U'권' || u == U'부' || u == U'회' || u == U'편' || u == U'막')) return true;
     if (!je && u == U'장' && (j + 1 >= b || t[j + 1] == ' ' || t[j + 1] == '.' || t[j + 1] == ']' || t[j + 1] == 0x3011)) return true;
     return false;
+}
+// v2.4.5 보완: 위 판별이 놓치던 형태를 더함 (첫째 판별에 걸리던 줄은 그대로 목차에 남음)
+//  - 한자 숫자 장 번호: 第一章 第十二章 第一百零三回 第二十話 (第 다음에 한자 숫자)
+//  - 중국어·일본어 단위: 第3卷 第2节 第5集 第1幕 第4话(간체) 第2巻
+//  - 줄 안의 제로폭 글자(제​1화), 앞 꾸밈(◆ ★ ■ ※ - = 《 （ 등)
+//  - Chapter/Part/Episode/Vol. 의 대소문자, 로마 숫자, 영어 숫자 낱말 (Chapter One, Part II, ch.12, EP 3)
+//  - 序章 楔子 番外 尾声 后记 プロローグ あとがき 서막 막간 번외 등
+//  - 40자를 넘는 긴 제목 (제/第·Chapter가 있고 단위 뒤가 띄어쓰기·구두점인 줄만 80자까지)
+static bool TocSpace(char32_t c) { return c == ' ' || c == '\t' || c == 0x3000 || c == 0xA0; }
+static bool TocIn(char32_t c, const char32_t* set) { for (; *set; ++set) if (*set == c) return true; return false; }
+static bool TocHanNum(char32_t c) { return TocIn(c, U"零〇○一二两兩三四五六七八九十百千万萬壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅"); }
+// 제목 단위·낱말 뒤: 줄 끝, 띄어쓰기, 구두점, 닫는 괄호, 숫자
+static bool TocEdge(const U32& L, size_t j) {
+    if (j >= L.size()) return true;
+    char32_t c = L[j];
+    return TocSpace(c) || IsDigitCh(c) || TocIn(c, U".:：．。、,，-–—―~～·・!！?？)）]］】>＞〉》」』〕\"“”'‘’|/_*＊");
+}
+static char32_t TocLower(char32_t c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+static bool TocStartsCI(const U32& L, size_t i, const char* w) {
+    for (; *w; ++w, ++i) if (i >= L.size() || TocLower(L[i]) != (char32_t)*w) return false;
+    return true;
+}
+static bool TocNumberWord(const U32& L, size_t& j) {   // One, Twenty-One, Hundred
+    static const char* ws[] = {"seventeen", "thirteen", "fourteen", "eighteen", "nineteen", "fifteen", "sixteen", "hundred",
+        "eleven", "twelve", "twenty", "thirty", "seventy", "forty", "fifty", "sixty", "eighty", "ninety",
+        "three", "seven", "eight", "four", "five", "nine", "one", "two", "six", "ten", nullptr};
+    bool any = false;
+    for (;;) {
+        bool hit = false;
+        for (int k = 0; ws[k]; ++k)
+            if (TocStartsCI(L, j, ws[k])) {
+                size_t e = j + strlen(ws[k]);
+                if (e < L.size() && ((L[e] >= 'a' && L[e] <= 'z') || (L[e] >= 'A' && L[e] <= 'Z'))) continue;
+                j = e; hit = any = true; break;
+            }
+        if (!hit) return any;
+        if (j < L.size() && L[j] == '-' && j + 1 < L.size() && ((L[j + 1] >= 'a' && L[j + 1] <= 'z') || (L[j + 1] >= 'A' && L[j + 1] <= 'Z'))) { ++j; continue; }
+        return true;
+    }
+}
+static bool IsChapterLineMore(const U32& t, size_t a, size_t b) {
+    U32 L;                                                  // 보이지 않는 글자를 뺀 줄
+    for (size_t q = a; q < b && L.size() < 200; ++q) if (!IsInvisibleCh(t[q]) && t[q] != '\r') L += t[q];
+    size_t s0 = 0, e0 = L.size();
+    while (s0 < e0 && TocSpace(L[s0])) ++s0;
+    while (e0 > s0 && TocSpace(L[e0 - 1])) --e0;
+    L = L.substr(s0, e0 - s0);
+    size_t n = L.size();
+    if (n == 0 || n > 80) return false;
+    size_t i = 0;
+    bool hash = false;
+    for (int k = 0; i < n && k < 6; ++k) {                  // 앞 꾸밈·여는 괄호
+        char32_t c = L[i];
+        if (TocSpace(c)) { ++i; --k; continue; }
+        if (c == '#' || c == 0xFF03) { hash = true; ++i; continue; }
+        if (TocIn(c, U"[［【<＜〈《「『(（〔◆◇■□●○◎★☆※▶▷►◀◁▣◈♠♣♥♦♡♤♧•·・*＊=＝-–—―~～_")) { ++i; continue; }
+        break;
+    }
+    while (i < n && TocSpace(L[i])) ++i;
+    if (i >= n) return false;
+    // 1) 머리말·맺음말 낱말
+    if (n <= 40) {
+        for (const char32_t* w : {U"프롤로그", U"에필로그", U"외전", U"서장", U"종장", U"서막", U"막간", U"번외", U"작가의 말", U"작가의말",
+                                  U"序章", U"序幕", U"序言", U"楔子", U"引子", U"尾声", U"尾聲", U"后记", U"後記", U"番外", U"终章", U"終章",
+                                  U"结局", U"結局", U"间章", U"間章", U"幕间", U"幕間", U"プロローグ", U"エピローグ", U"あとがき", U"番外編"})
+            if (StartsWithStr(L, i, w) && TocEdge(L, i + std::char_traits<char32_t>::length(w))) return true;
+        for (const char* w : {"prologue", "epilogue", "interlude", "afterword", "side story"})
+            if (TocStartsCI(L, i, w) && TocEdge(L, i + strlen(w))) return true;
+    }
+    // 2) Chapter / Part / Episode / Volume … + 숫자·로마 숫자·영어 숫자 낱말
+    {
+        static const char* kw[] = {"chapter", "chap.", "ch.", "part", "episode", "ep.", "ep", "volume", "vol.", "book", nullptr};
+        for (int k = 0; kw[k]; ++k) {
+            size_t kl = strlen(kw[k]);
+            if (!TocStartsCI(L, i, kw[k])) continue;
+            size_t j = i + kl;
+            bool dot = kw[k][kl - 1] == '.';
+            if (!dot && j < n && !TocSpace(L[j]) && !IsDigitCh(L[j]) && L[j] != '.' && L[j] != '#') continue;   // party, chapters, epic
+            while (j < n && (TocSpace(L[j]) || L[j] == '.' || L[j] == '#')) ++j;
+            if (j >= n) continue;
+            size_t d = j;
+            while (j < n && IsDigitCh(L[j])) ++j;
+            bool ok = j > d, word = false;
+            if (!ok) {                                       // 로마 숫자 (대문자)
+                while (j < n && TocIn(L[j], U"IVXLCDM")) ++j;
+                ok = j > d && j - d <= 8;
+                if (!ok) { j = d; ok = TocNumberWord(L, j); }
+                word = ok;
+            }
+            if (!ok || !TocEdge(L, j)) continue;
+            // Chapter·Ch.는 번호 뒤 띄어쓰기 허용. Part·Book·Vol.·Episode, 로마 숫자·영어 숫자 낱말은
+            // 번호 뒤가 줄 끝이거나 구두점일 때만 (Part 2 of the plan…, Book I bought… 같은 문장 제외)
+            bool chap = k <= 2;
+            if ((!chap || word) && j < n && TocSpace(L[j])) {
+                size_t m = j; while (m < n && TocSpace(L[m])) ++m;
+                if (m < n && !TocIn(L[m], U":：-–—―.．|/)）]】")) continue;
+            }
+            return n <= 60;
+        }
+    }
+    // 3) 제/第 + 숫자(아라비아·한자) + 단위
+    bool je = L[i] == U'제' || L[i] == U'第';
+    size_t j = i + (je ? 1 : 0);
+    while (j < n && TocSpace(L[j])) ++j;
+    size_t d = j;
+    bool han = false;
+    while (j < n && IsDigitCh(L[j])) ++j;
+    if (j == d && je) { while (j < n && TocHanNum(L[j])) ++j; han = j > d; }
+    if (j == d) return false;
+    if (hash && !je && TocEdge(L, j) && (j >= n || !IsDigitCh(L[j]))) return n <= 40;   // #12
+    while (j < n && TocSpace(L[j])) ++j;
+    if (j >= n) return false;
+    char32_t u = L[j];
+    bool edge = TocEdge(L, j + 1);
+    if (n > 40) {   // 긴 줄은 단위 바로 뒤가 줄 끝·띄어쓰기·쌍점·줄표·닫는 괄호일 때만 (제1화, 그리고… 같은 문장 제외)
+        size_t q = j + 1;
+        while (q < n && TocIn(L[q], U")）]］】>＞〉》」』〕")) ++q;
+        if (q < n && !TocSpace(L[q]) && !TocIn(L[q], U":：-–—―~～|")) return false;
+        edge = true;
+    }
+    if (!je) {   // 第·제 없이: 3화 12話 5回 7章 4话 (뒤가 띄어쓰기·구두점일 때만)
+        return TocIn(u, U"화話回章话") && edge && n <= 60;
+    }
+    if (TocIn(u, U"章話话卷巻幕")) return true;                   // 第一章我… 처럼 붙여 쓴 제목도
+    if (TocIn(u, U"回节節集部篇季")) return edge;                 // 第一回见面·第一节课·第一部分 같은 문장 제외
+    if (!han && TocIn(u, U"화장권부회편막절")) return edge || n <= 40;
+    return false;
+}
+static bool IsChapterLine(const U32& t, size_t a, size_t b) {
+    return IsChapterLineBase(t, a, b) || IsChapterLineMore(t, a, b);
 }
 static void ShowTocMenu(HWND anchor) {
     HideTip();
