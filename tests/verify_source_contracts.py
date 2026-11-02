@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.4.5).
+"""Build-time checks for the current release (v2.4.6).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,10 +23,65 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.5"' in main
-assert "FILEVERSION 2,4,5,0" in rc and 'VALUE "ProductVersion", "2.4.5"' in rc
-assert "야문 클린리더 v2.4.5" in manual
-assert "v2.4.4" in manual and "16. v2.4.5" in manual
+assert 'kVersion = L"2.4.6"' in main
+assert "FILEVERSION 2,4,6,0" in rc and 'VALUE "ProductVersion", "2.4.6"' in rc
+assert "야문 클린리더 v2.4.6" in manual
+assert "v2.4.4" in manual and "16. v2.4.5" in manual and "17. v2.4.6" in manual
+assert manual.index("16. v2.4.5") < manual.index("17. v2.4.6")
+
+# v2.4.6 flow fixes
+def body(name, src=main):
+    start = src.index(name)
+    brace = src.index("{", start)
+    depth, end = 1, brace + 1
+    while depth:
+        depth += (src[end] == "{") - (src[end] == "}")
+        end += 1
+    return src[start:end]
+# unsaved result edits: asked before every way of replacing or closing the text
+leave = body("static bool ConfirmLeave(")
+assert "HasUnsavedEdits()" in leave and "MB_YESNOCANCEL" in leave and "return DoSave();" in leave
+assert main.count("ConfirmLeave(L\"다른 파일을 엶\")") == 4      # 열기 · 최근 파일 · 끌어다 놓기 · 넘겨받기
+for action in ("닫음", "비움", "붙여넣은 글로 바꿈", "합친 글을 엶"):
+    assert f'ConfirmLeave(L"{action}")' in main, action
+close = main[main.index("    case WM_CLOSE:\n        if (g_bwWnd"):]
+close = close[:close.index("return 0;\n    case WM_QUERYENDSESSION")]
+assert close.index('ConfirmLeave(L"닫음")') < close.index("SaveReadPos();")
+unsaved = body("static bool HasUnsavedEdits() {")
+assert "g_dstDirty" in unsaved and "g_savedHash" in unsaved and "g_busy" in unsaved
+assert "g_savedHash = TextHash(w); g_savedValid = true;" in body("static int SaveTo(")
+assert main.count("ForgetSaved();") >= 4                          # 새 글을 열 때마다 저장 기록을 잊음
+assert "if (!HasUnsavedEdits()) return true;" in body("static bool ConfirmDiscardEdits()")
+src_timer = main[main.index("} else if (wp == TIMER_SRC) {"):]
+src_timer = src_timer[:src_timer.index("Reprocess();")]
+assert "HasUnsavedEdits()" in src_timer and "g_srcHoldHash" in src_timer
+# Windows shutdown: position and settings saved, unsaved edits block with a reason
+q = main[main.index("    case WM_QUERYENDSESSION:"):main.index("    case WM_APP_ENDSAVE:")]
+assert "SaveReadPos();" in q and "SaveSettings();" in q and "ShutdownBlockReasonCreate" in q and "return FALSE;" in q
+assert "ShutdownBlockReasonDestroy(h);" in main
+assert "if (g_fullscreen) wp = g_wpBeforeFull;" in body("static void SaveSettings()")
+# safe writes and complete reads
+wa = body("static bool WriteAll(")
+assert "MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)" in wa
+assert wa.index("FlushFileBuffers") < wa.index("MoveFileExW") and "DeleteFileW(tmp.c_str());" in wa
+assert "if (got != out.size()) { out.clear(); return false; }" in body("static bool ReadAll(")
+# save safeguards
+sa = body("static bool DoSaveAs()")
+assert "IsEpubPath(target)" in sa and "SamePath(target, g_path)" in sa and "MB_DEFBUTTON2" in sa
+assert "BusySaveNote()" in body("static bool DoSave()") and "return DoSaveAs();" in body("static bool DoSave()")
+# batch: distinct names inside one run, no '?' in results
+assert "BwUniqueOuts(j);" in main and main.index("BwUniqueOuts(j);") < main.index("for (auto& o : j->outs) if (FileExists(o)) exist++;")
+bt = body("static DWORD WINAPI BwThread(")
+assert "if (lossy) ob = Encode(rw, E_UTF8BOM, nullptr);" in bt
+# one window
+ho = body("static bool HandOffToRunning()")
+assert "CreateMutexW" in ho and "ERROR_ALREADY_EXISTS" in ho and "WM_COPYDATA" in ho and "GetFullPathNameW" in ho
+assert body("int WINAPI wWinMain(").index("if (HandOffToRunning()) return 0;") < body("int WINAPI wWinMain(").index("RegisterClassExW")
+op = main[main.index("    case WM_APP_OPENFILES: {"):main.index("    case WM_DESTROY:\n        PostQuitMessage(0);")]
+assert "g_bwWnd || g_rulesWnd || g_aboutWnd || g_busy" in op and 'ConfirmLeave(L"다른 파일을 엶")' in op
+# records
+assert "PruneMarks();" in body("static void SaveMarks(")
+assert "MB_DEFBUTTON2" in main[main.index("if (cmd == ID_RECENT_CLEAR)"):main.index("if (cmd == ID_RECENT_CLEAR)") + 400]
 # v2.4.5 reading-mode TOC: old rule kept as-is, new rule only adds headings
 assert "static bool IsChapterLineBase(" in main and "static bool IsChapterLineMore(" in main
 assert "return IsChapterLineBase(t, a, b) || IsChapterLineMore(t, a, b);" in main
@@ -100,4 +155,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.4.5 source contracts and 600,001 actual hit-index cases: PASS")
+print("v2.4.6 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
