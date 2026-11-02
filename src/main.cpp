@@ -85,8 +85,8 @@ static HWND g_btnPaste, g_btnClear, g_btnCopyAll, g_btnReplace;  // 글 칸 머�
 static int g_srcMetaLeft = 0, g_dstMetaLeft = 0;     // 칸 머리 오른쪽 글이 시작할 수 있는 곳
 static HWND g_cbScene, g_cbQuote, g_cbEll, g_chkHanja, g_chkHalf, g_cbReadEnc, g_btnFold, g_btnAbout, g_btnReset;
 static const wchar_t* kAppName = L"야문 클린리더";
-static const wchar_t* kVersion = L"2.4.5";
-static const wchar_t* kDate = L"2026년 10월 27일";
+static const wchar_t* kVersion = L"2.4.6";
+static const wchar_t* kDate = L"2026년 11월 2일";
 // 빌드 정보: GitHub Actions가 컴파일할 때 -DBUILD_UTC=<UTC 초> -DBUILD_SHA="<커밋>"으로 넣음.
 // 직접 빌드하면 값이 없어 정보 창에 "개발본"으로 표시됨.
 #ifndef BUILD_UTC
@@ -1042,19 +1042,35 @@ static bool ReadAll(const wstring& path, std::string& out) {
         got += rd;
     }
     CloseHandle(h);
-    out.resize(got);
+    // v2.4.6: 읽다가 끊기면(네트워크 드라이브 등) 앞부분만 연 채 정리·저장하지 않게 실패로 알림
+    if (got != out.size()) { out.clear(); return false; }
     return true;
 }
-static bool WriteAll(const wstring& path, const std::string& data) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    size_t done = 0; bool ok = true;
+static bool WriteHandle(HANDLE h, const std::string& data) {
+    size_t done = 0;
     while (done < data.size()) {
         DWORD wr = 0;
         DWORD want = (DWORD)((data.size() - done) > (1u << 30) ? (1u << 30) : (data.size() - done));
-        if (!WriteFile(h, data.data() + done, want, &wr, nullptr) || wr == 0) { ok = false; break; }
+        if (!WriteFile(h, data.data() + done, want, &wr, nullptr) || wr == 0) return false;
         done += wr;
     }
+    return true;
+}
+// 저장 (v2.4.6): 같은 폴더의 임시 파일에 다 쓴 뒤 한 번에 바꿔치기 — 쓰는 도중 디스크가 가득 차거나
+// USB가 빠져도 이미 있던 파일은 그대로 남음. 임시 파일을 만들 수 없는 폴더에서만 예전처럼 바로 씀.
+static bool WriteAll(const wstring& path, const std::string& data) {
+    const wstring tmp = path + L".저장중~";
+    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        bool ok = WriteHandle(h, data) && FlushFileBuffers(h);
+        CloseHandle(h);
+        if (ok && MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
+        DeleteFileW(tmp.c_str());  // 쓰기 실패 또는 바꾸지 못함 (읽기 전용 파일 등): 기존 파일은 그대로
+        return false;
+    }
+    h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    bool ok = WriteHandle(h, data);
     CloseHandle(h);
     return ok;
 }
@@ -1983,6 +1999,16 @@ static U32 TidyParts(const U32& text, const std::vector<size_t>& bounds, const T
 static bool g_busy = false, g_again = false;  // 뒤에서 정리하는 중 / 끝나면 다시 정리
 static int g_gen = 0;
 #define WM_APP_PROCDONE (WM_APP + 20)
+#define WM_APP_ENDSAVE (WM_APP + 21)    // Windows 종료를 멈춘 뒤 저장할지 묻기
+#define WM_APP_OPENFILES (WM_APP + 22)  // 다시 실행해 넘어온 파일 열기
+static const ULONG_PTR kOpenFilesMagic = 0x59435231;  // "YCR1"
+static const wchar_t* kWndClass = L"TextTidyWnd";
+// 앞으로 가져오기 (최소화돼 있으면 되살림). 보조 창이 열려 있으면 그 창을.
+static void BringToFront() {
+    if (IsIconic(g_hwnd)) ShowWindow(g_hwnd, SW_RESTORE);
+    HWND pop = GetLastActivePopup(g_hwnd);
+    SetForegroundWindow(pop ? pop : g_hwnd);
+}
 
 static size_t PreviewCut(const U32& t, size_t want) {
     if (t.size() <= want) return t.size();
@@ -2194,8 +2220,10 @@ static void Reprocess() {
     FinishReprocess(j);
 }
 
+static bool HasUnsavedEdits();
+static void ForgetSaved();
 static bool ConfirmDiscardEdits() {
-    if (!g_dstDirty) return true;
+    if (!HasUnsavedEdits()) return true;  // v2.4.6: 이미 저장한 수정은 다시 묻지 않음
     return MessageBoxW(g_hwnd, L"결과 창에서 직접 고친 내용이 사라지고 새 설정으로 다시 정리됩니다.\n계속할까요?",
                        L"야문 클린리더", MB_OKCANCEL | MB_ICONQUESTION) == IDOK;
 }
@@ -2330,6 +2358,7 @@ static bool LoadFile(const wstring& path) {
     g_mergeFiles.clear();
     g_mergeBounds.clear();
     g_lastSaved.clear();
+    ForgetSaved();
     ShowSource();
     MEAS_MARK(L"원본 칸 준비 (읽기 모드는 비워 둠)");
     LoadWantPos(path);
@@ -2353,9 +2382,28 @@ static bool HasInvisible(const wstring& w) {
     return false;
 }
 
-static bool SaveTo(const wstring& path) {
-    if (g_busy) return false;
-    wstring w = g_preview ? U32ToW(g_out, true) : GetRichText(g_dst);  // 큰 파일은 화면(앞부분)이 아니라 전체 결과
+// 저장할 정리 결과 (큰 파일은 화면(앞부분)이 아니라 전체 결과)
+static wstring ResultText() { return g_preview ? U32ToW(g_out, true) : GetRichText(g_dst); }
+static unsigned long long TextHash(const wstring& w) {
+    unsigned long long h = 1469598103934665603ULL;
+    for (wchar_t c : w) { h ^= (unsigned)c; h *= 1099511628211ULL; }
+    return h ^ (unsigned long long)w.size();
+}
+// 결과 창에서 고친 내용을 저장했는지 (v2.4.6): 마지막으로 저장한 결과와 같으면 "저장함"
+static bool g_savedValid = false;
+static unsigned long long g_savedHash = 0;
+static void ForgetSaved() { g_savedValid = false; g_savedHash = 0; }
+// 결과 창(찾기·바꾸기 포함)에서 직접 고친 내용 중 저장하지 않은 것이 있나.
+// 정리 중이면 그 결과로 바뀔 글이므로 묻지 않음 (이미 바꾸기로 동의한 경우).
+static bool HasUnsavedEdits() {
+    if (!g_dstDirty || g_busy || g_text.empty()) return false;
+    return !(g_savedValid && TextHash(ResultText()) == g_savedHash);
+}
+
+// 저장: 1 저장함 · 0 사용자가 취소 · -1 쓰지 못함 (알림은 부르는 쪽에서: 다른 위치를 고르게 함)
+static int SaveTo(const wstring& path) {
+    if (g_busy) return 0;
+    wstring w = ResultText();
     int enc = SaveEncoding(g_enc);
     if (EncCp(enc) && HasInvisible(w)) enc = E_UTF8BOM;
     int lossy = 0;
@@ -2364,13 +2412,10 @@ static bool SaveTo(const wstring& path) {
         wstring m = wstring(kEncName[enc]) + L"로 표현할 수 없는 글자 " + std::to_wstring(lossy) +
                     L"개가 '?'로 바뀝니다.\n그래도 저장할까요? (아니요를 누르면 UTF-8로 저장합니다)";
         int r = MessageBoxW(g_hwnd, m.c_str(), L"야문 클린리더", MB_YESNOCANCEL | MB_ICONWARNING);
-        if (r == IDCANCEL) return false;
+        if (r == IDCANCEL) return 0;
         if (r == IDNO) bytes = Encode(w, E_UTF8BOM, nullptr), enc = E_UTF8BOM;
     }
-    if (!WriteAll(path, bytes)) {
-        MessageBoxW(g_hwnd, (L"저장하지 못했습니다:\n" + path).c_str(), L"야문 클린리더", MB_ICONERROR);
-        return false;
-    }
+    if (!WriteAll(path, bytes)) return -1;
     {
         size_t sl = path.find_last_of(L"\\/");
         wstring dir = sl == wstring::npos ? L"" : path.substr(0, sl);
@@ -2379,13 +2424,26 @@ static bool SaveTo(const wstring& path) {
         InvalidateRect(g_hwnd, &g_rcStatus, FALSE);
     }
     g_lastSaved = path;
+    g_savedHash = TextHash(w); g_savedValid = true;
     g_savedFlash = true;
     InvalidateRect(g_btnSave, nullptr, FALSE);
     SetTimer(g_hwnd, TIMER_SAVED, 2000, nullptr);
-    return true;
+    return 1;
+}
+static bool SamePath(const wstring& a, const wstring& b) {
+    if (a.empty() || b.empty()) return false;
+    wchar_t fa[MAX_PATH * 4] = {}, fb[MAX_PATH * 4] = {};
+    DWORD na = GetFullPathNameW(a.c_str(), MAX_PATH * 4, fa, nullptr), nb = GetFullPathNameW(b.c_str(), MAX_PATH * 4, fb, nullptr);
+    if (!na || !nb || na >= MAX_PATH * 4 || nb >= MAX_PATH * 4) return _wcsicmp(a.c_str(), b.c_str()) == 0;
+    return _wcsicmp(fa, fb) == 0;
+}
+static void BusySaveNote() {
+    MessageBeep(MB_ICONASTERISK);
+    SetStatus(L"정리하는 중이라 아직 저장하지 않았습니다. 정리가 끝난 뒤 다시 저장하세요.");
 }
 
-static void DoSaveAs() {
+static bool DoSaveAs() {
+    if (g_busy) { BusySaveNote(); return false; }
     wchar_t buf[MAX_PATH * 4] = {};
     wstring def = g_path.empty() ? L"정리된 글.txt" : FileName(OutPath(g_path));
     wcsncpy(buf, def.c_str(), MAX_PATH * 4 - 1);
@@ -2397,18 +2455,61 @@ static void DoSaveAs() {
     of.nMaxFile = MAX_PATH * 4;
     of.lpstrDefExt = L"txt";
     of.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-    if (GetSaveFileNameW(&of)) SaveTo(buf);
+    for (;;) {
+        if (!GetSaveFileNameW(&of)) return false;
+        wstring target = buf;
+        // v2.4.6: 전자책 파일 위에 글자 파일을 쓰면 그 EPUB은 더는 열리지 않음
+        if (IsEpubPath(target)) {
+            MessageBoxW(g_hwnd, L"EPUB 전자책 파일 이름으로는 저장할 수 없습니다.\n정리 결과는 글자 파일(.txt)로 저장하세요.",
+                        L"야문 클린리더", MB_ICONWARNING);
+            continue;
+        }
+        // v2.4.6: 열어 둔 원본 위에 저장하면 원본이 정리 결과로 바뀜 — 한 번 더 확인 (기본: 아니요)
+        bool original = SamePath(target, g_path);
+        for (auto& f : g_mergeFiles) if (SamePath(target, f)) original = true;
+        if (original && MessageBoxW(g_hwnd, (L"고른 파일은 지금 열어 둔 원본입니다.\n\n" + target +
+                        L"\n\n원본이 정리 결과로 바뀌며 되돌릴 수 없습니다. 그래도 저장할까요?").c_str(),
+                        L"원본 위에 저장", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+            continue;
+        int r = SaveTo(target);
+        if (r < 0) {
+            MessageBoxW(g_hwnd, (L"저장하지 못했습니다:\n" + target + L"\n\n다른 위치나 이름을 고르세요.").c_str(), L"야문 클린리더", MB_ICONERROR);
+            continue;
+        }
+        return r > 0;
+    }
 }
 
-static void DoSave() {
-    if (g_text.empty() || g_busy) return;
-    if (g_path.empty()) { DoSaveAs(); return; }
+static bool DoSave() {
+    if (g_text.empty()) return false;
+    if (g_busy) { BusySaveNote(); return false; }
+    if (g_path.empty()) return DoSaveAs();
     wstring out = OutPath(g_path);
     if (FileExists(out) && _wcsicmp(out.c_str(), g_lastSaved.c_str()) != 0) {
         wstring m = L"이미 있는 파일입니다. 덮어쓸까요?\n\n" + out;
-        if (MessageBoxW(g_hwnd, m.c_str(), L"야문 클린리더", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+        if (MessageBoxW(g_hwnd, m.c_str(), L"야문 클린리더", MB_YESNO | MB_ICONQUESTION) != IDYES) return false;
     }
-    SaveTo(out);
+    int r = SaveTo(out);
+    if (r >= 0) return r > 0;
+    // v2.4.6: 원본 폴더에 쓸 수 없음 (읽기 전용 폴더·압축 파일 안 등) → 다른 위치에 저장할지 물음
+    if (MessageBoxW(g_hwnd, (L"저장하지 못했습니다:\n" + out + L"\n\n이 폴더에 쓸 수 없을 수 있습니다. 다른 위치에 저장할까요?").c_str(),
+                    L"야문 클린리더", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
+    return DoSaveAs();
+}
+
+// 결과 창에서 고친 내용을 저장하지 않은 채 다른 글로 바꾸거나 닫을 때 (v2.4.6).
+// 예: 저장 후 진행 · 아니요: 저장하지 않고 진행 · 취소: 그대로 둠. 고친 내용이 없으면 묻지 않음.
+static unsigned long long g_srcHoldHash = 0;  // 원본 칸 수정 반영을 [취소]한 때의 결과 창 내용
+static bool ConfirmLeave(const wchar_t* action) {
+    if (!HasUnsavedEdits()) return true;
+    HWND owner = g_hwnd;
+    if (!IsWindowEnabled(g_hwnd)) { HWND pop = GetLastActivePopup(g_hwnd); if (pop) owner = pop; }
+    wstring m = L"결과 창에서 직접 고친 내용(찾기·바꾸기 포함)을 아직 저장하지 않았습니다.\n저장할까요?\n\n"
+                L"예: 저장한 뒤 " + wstring(action) + L"\n아니요: 저장하지 않고 " + action + L"\n취소: 그대로 둠";
+    int r = MessageBoxW(owner, m.c_str(), L"야문 클린리더", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (r == IDCANCEL) return false;
+    if (r == IDYES) return DoSave();
+    return true;
 }
 
 // 여러 파일을 순서대로 합쳐서 화면에 엶 (저장하면 "첫 파일_합본_정리.txt")
@@ -2459,6 +2560,7 @@ static bool LoadMerged(const std::vector<wstring>& files, HWND owner) {
     g_epub = false;
     g_path = MergedPath(used);
     g_lastSaved.clear();
+    ForgetSaved();
     ShowSource();
     UpdateTitle();
     Reprocess();
@@ -2480,7 +2582,7 @@ static void DoOpen() {
     of.lpstrFile = buf;
     of.nMaxFile = MAX_PATH * 4;
     of.Flags = OFN_FILEMUSTEXIST | OFN_EXPLORER;
-    if (GetOpenFileNameW(&of)) LoadFile(buf);
+    if (GetOpenFileNameW(&of) && ConfirmLeave(L"다른 파일을 엶")) LoadFile(buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -3777,12 +3879,46 @@ static std::vector<long> LoadMarks() {
     std::sort(v.begin(), v.end());
     return v;
 }
+// ini의 한 구역 전체 ("키=값" 줄들)
+static std::vector<wstring> IniSection(const wchar_t* sect) {
+    std::vector<wstring> out;
+    std::vector<wchar_t> buf(64 * 1024);
+    for (;;) {
+        DWORD got = GetPrivateProfileSectionW(sect, buf.data(), (DWORD)buf.size(), g_ini.c_str());
+        if (got < buf.size() - 2 || buf.size() >= 8u * 1024 * 1024) break;
+        buf.resize(buf.size() * 2);
+    }
+    for (const wchar_t* q = buf.data(); *q; q += wcslen(q) + 1) out.push_back(q);
+    return out;
+}
+// v2.4.6: 책갈피 기록은 지우는 곳이 없어 쌓이기만 했음 — 파일이 200개를 넘으면 읽던 곳 기록이 남아 있는
+// (최근에 읽은) 파일과 지금 파일의 책갈피만 남김. 읽던 곳 기록도 150개만 남기는 규칙과 맞춤.
+static void PruneMarks() {
+    std::vector<wstring> marks = IniSection(L"mark");
+    if (marks.size() <= 200) return;
+    std::vector<wstring> pos = IniSection(L"pos");
+    const wstring me = g_posPath.empty() ? wstring() : PosKey(g_posPath);
+    auto keyOf = [](const wstring& line) { size_t e = line.find(L'='); return e == wstring::npos ? line : line.substr(0, e); };
+    std::vector<wstring> keep;
+    for (auto& m : marks) {
+        wstring k = keyOf(m);
+        bool live = k == me;
+        for (auto& pl : pos) if (!live && keyOf(pl) == k) live = true;
+        if (live) keep.push_back(m);
+    }
+    if (keep.size() > 200) keep.resize(200);
+    wstring sec;
+    for (auto& e : keep) { sec += e; sec += L'\0'; }
+    sec += L'\0';
+    WritePrivateProfileSectionW(L"mark", sec.c_str(), g_ini.c_str());
+}
 static void SaveMarks(const std::vector<long>& v) {
     if (g_posPath.empty() || g_ini.empty()) return;
     if (v.empty()) { WritePrivateProfileStringW(L"mark", PosKey(g_posPath).c_str(), nullptr, g_ini.c_str()); return; }
     wstring s = std::to_wstring((long)g_out.size());
     for (size_t i = 0; i < v.size(); ++i) s += (i ? L"," : L";") + std::to_wstring(v[i]);
     WritePrivateProfileStringW(L"mark", PosKey(g_posPath).c_str(), s.c_str(), g_ini.c_str());
+    PruneMarks();
 }
 static void AddMark() {
     if (!g_reading) return;
@@ -3879,11 +4015,16 @@ static void ShowRecentMenu(HWND anchor, HWND clickBtn) {
     RECT r; GetWindowRect(anchor, &r);
     int cmd = TrackBtnMenu(m, clickBtn, TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom);
     DestroyMenu(m);
-    if (cmd == ID_RECENT_CLEAR) { SaveRecent({}); SetStatus(L"최근 파일 목록을 비웠습니다."); }
+    if (cmd == ID_RECENT_CLEAR) {  // v2.4.6: 실수로 누르면 되돌릴 수 없으므로 한 번 확인 (파일은 지우지 않음)
+        if (MessageBoxW(g_hwnd, L"최근 파일 목록을 모두 비울까요?\n(파일과 읽던 곳 기록은 그대로입니다)", L"야문 클린리더",
+                        MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK) {
+            SaveRecent({}); SetStatus(L"최근 파일 목록을 비웠습니다.");
+        }
+    }
     else if (cmd >= ID_RECENT_BASE && cmd < ID_RECENT_BASE + (int)v.size()) {
         wstring path = v[cmd - ID_RECENT_BASE];
-        if (FileExists(path)) LoadFile(path);
-        else SetStatus(L"파일을 찾을 수 없습니다: " + FileName(path));  // 메뉴를 연 뒤에 옮겨진 경우
+        if (!FileExists(path)) SetStatus(L"파일을 찾을 수 없습니다: " + FileName(path));  // 메뉴를 연 뒤에 옮겨진 경우
+        else if (ConfirmLeave(L"다른 파일을 엶")) LoadFile(path);
     }
 }
 
@@ -5003,9 +5144,32 @@ static std::vector<wstring> PickFiles(HWND owner, const wchar_t* title) {
 struct BwJob {
     std::vector<wstring> files;
     std::vector<wstring> outs;
+    std::vector<wstring> notes;  // 저장 이름을 바꾼 까닭 (같은 이름의 결과가 겹칠 때)
     std::vector<char> skip;
     TidyOptions o;
 };
+// v2.4.6: 한 번에 정리하는 파일들의 결과 이름이 겹치면(한 폴더에 모은 A\1.txt와 B\1.txt, 같은 폴더의
+// 책.txt와 책.epub) 뒤 파일이 앞 파일의 결과를 덮어쓰지 않게 이름을 달리함:
+// 먼저 원래 확장자를 붙이고(책_epub_정리.txt), 그래도 겹치면 (2), (3)…
+static void BwUniqueOuts(BwJob* j) {
+    std::vector<wstring> seen;
+    auto taken = [&](const wstring& o) { for (auto& x : seen) if (_wcsicmp(x.c_str(), o.c_str()) == 0) return true; return false; };
+    j->notes.assign(j->outs.size(), wstring());
+    for (size_t i = 0; i < j->outs.size(); ++i) {
+        wstring o = j->outs[i];
+        if (taken(o)) {
+            const wstring& f = j->files[i];
+            wstring ext = ExtOf(f);
+            const wstring tail = L"_정리.txt";
+            wstring stem = o.size() > tail.size() ? o.substr(0, o.size() - tail.size()) : o;
+            if (!ext.empty() && ext != L"txt") o = stem + L"_" + ext + tail;
+            for (int k = 2; taken(o) && k < 1000; ++k) o = stem + L" (" + std::to_wstring(k) + L")" + tail;
+            j->notes[i] = L"같은 이름이 겹쳐 " + FileName(o) + L"로 저장";
+        }
+        j->outs[i] = o;
+        seen.push_back(o);
+    }
+}
 struct BwStep { int idx; wstring status; };
 static DWORD WINAPI BwThread(LPVOID p) {
     BwJob* j = (BwJob*)p;
@@ -5041,8 +5205,11 @@ static DWORD WINAPI BwThread(LPVOID p) {
                 if (EncCp(senc) && HasInvisible(rw)) senc = E_UTF8BOM;
                 int lossy = 0;
                 std::string ob = Encode(rw, senc, &lossy);
+                // v2.4.6: 고른 인코딩으로 못 쓰는 글자가 있으면 '?'로 바꾸지 않고 UTF-8로 저장 (글자를 잃지 않음)
+                if (lossy) ob = Encode(rw, E_UTF8BOM, nullptr);
                 if (!WriteAll(j->outs[i], ob)) st = L"실패: 저장할 수 없음";
-                else st = lossy ? L"완료 ('?'로 바뀐 글자 " + std::to_wstring(lossy) + L"개)" : L"완료";
+                else st = lossy ? L"완료 (UTF-8로 저장: " + wstring(kEncName[senc]) + L"로 못 쓰는 글자 " + std::to_wstring(lossy) + L"개)" : L"완료";
+                if (!j->notes[i].empty()) st += L" · " + j->notes[i];
             }
         }
         PostMessageW(g_bwWnd, WM_BW_STEP, 1, (LPARAM) new BwStep{(int)i, st});
@@ -5055,7 +5222,7 @@ static void BwStart() {
     if (CbSel(g_bwMode) == 1) {  // 합쳐서 열기
         std::vector<wstring> files;
         for (auto& b : g_bw) files.push_back(b.path);
-        if (!ConfirmDiscardEdits()) return;
+        if (!ConfirmLeave(L"합친 글을 엶")) return;
         if (LoadMerged(files, g_bwWnd)) { AfterTextChange(); DestroyWindow(g_bwWnd); }
         return;
     }
@@ -5063,6 +5230,7 @@ static void BwStart() {
     BwJob* j = new BwJob;
     int exist = 0;
     for (auto& b : g_bw) { j->files.push_back(b.path); j->outs.push_back(BwOutPath(b.path)); }
+    BwUniqueOuts(j);
     for (auto& o : j->outs) if (FileExists(o)) exist++;
     bool overwrite = true;
     if (exist) {
@@ -5416,7 +5584,7 @@ static void HandleDrop(HDROP hd) {
         if (a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY)) files.push_back(s);
     }
     std::sort(files.begin(), files.end(), [](const wstring& a, const wstring& b) { return StrCmpLogicalW(FileName(a).c_str(), FileName(b).c_str()) < 0; });
-    if (files.size() == 1) LoadFile(files[0]);
+    if (files.size() == 1) { if (ConfirmLeave(L"다른 파일을 엶")) LoadFile(files[0]); }
     else if (files.size() > 1) OpenBatchWindow(files);
 }
 
@@ -5479,7 +5647,8 @@ static void SaveSettings() {
     IniSet(L"enc", CbSel(g_cbEnc));
     IniSet(L"fold", g_fold);
     WINDOWPLACEMENT wp = {sizeof(wp)};
-    if (GetWindowPlacement(g_hwnd, &wp)) {
+    if (g_fullscreen) wp = g_wpBeforeFull;  // 전체 화면 중(Windows 종료 등)이면 전체 화면 전의 창 위치
+    if (g_fullscreen || GetWindowPlacement(g_hwnd, &wp)) {
         IniSet(L"maximized", wp.showCmd == SW_SHOWMAXIMIZED);
         IniSet(L"w", MulDiv(wp.rcNormalPosition.right - wp.rcNormalPosition.left, 96, g_dpi));
         IniSet(L"h", MulDiv(wp.rcNormalPosition.bottom - wp.rcNormalPosition.top, 96, g_dpi));
@@ -6011,6 +6180,7 @@ static void PasteAsSource() {
     g_mergeFiles.clear();
     g_mergeBounds.clear();
     g_lastSaved.clear();
+    ForgetSaved();
     ShowSource();
     UpdateTitle();
     Reprocess();
@@ -6021,9 +6191,10 @@ static void PasteAsSource() {
 // 원본·결과 칸 비우기 (처음 상태)
 static void ClearAll() {
     if (g_busy) return;
-    if (!g_text.empty() && !ConfirmDiscardEdits()) return;
+    if (!g_text.empty() && !ConfirmLeave(L"비움")) return;
     SaveReadPos();
     g_posPath.clear();
+    ForgetSaved();
     g_newDoc = true;
     g_text.clear(); g_out.clear(); g_outToSrc.clear(); g_srcToOut.clear();
     g_path.clear(); g_mergeFiles.clear(); g_mergeBounds.clear(); g_lastSaved.clear();
@@ -6207,7 +6378,13 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
 #endif
         if (wp == TIMER_READ) {  // 읽기 모드: 읽은 곳 %
             int p = ReadPercent();
-            if (p != g_readPct) { g_readPct = p; InvalidateRect(h, g_fullscreen ? &g_rcDstHead : &g_rcStatus, FALSE); }
+            if (p != g_readPct) {
+                g_readPct = p; InvalidateRect(h, g_fullscreen ? &g_rcDstHead : &g_rcStatus, FALSE);
+                // v2.4.6: 읽던 곳은 닫을 때만 기록해, 정전·강제 종료 때는 처음부터 다시 찾아야 했음 — 읽는 중에도 1분에 한 번 기록
+                static DWORD lastPosSave = 0;
+                DWORD now = GetTickCount();
+                if (now - lastPosSave >= 60000) { lastPosSave = now; SaveReadPos(); }
+            }
             return 0;
         }
         KillTimer(h, wp);
@@ -6219,6 +6396,24 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             g_text = NormalizeNL(WToU32(w.data(), w.size()));
             g_mergeBounds.clear();  // 직접 고치면 파일 경계를 알 수 없으므로 한 글로 정리
             g_srcPending = false;
+            // v2.4.6: 원본 칸을 고치면 결과를 다시 정리하므로, 결과 창에서 고친(저장하지 않은) 내용이 있으면 먼저 물음.
+            // [취소]하면 결과는 그대로 두고, 원본 칸 수정은 다음 정리(옵션 변경 등) 때 함께 반영됨.
+            if (HasUnsavedEdits()) {
+                if (g_srcHoldHash != TextHash(ResultText())) {
+                    if (MessageBoxW(h, L"원본 칸을 고치면 결과를 다시 정리해, 결과 창에서 직접 고친(저장하지 않은) 내용이 사라집니다.\n계속할까요?\n\n"
+                                       L"취소를 누르면 결과 창은 그대로 두고, 원본 칸 수정은 다음에 다시 정리할 때 반영됩니다.",
+                                    L"야문 클린리더", MB_OKCANCEL | MB_ICONQUESTION) != IDOK) {
+                        g_srcHoldHash = TextHash(ResultText());
+                        SetStatus(L"결과 창의 고친 내용을 지키려고 원본 칸 수정을 아직 반영하지 않았습니다.");
+                        AfterTextChange();
+                        return 0;
+                    }
+                } else {
+                    AfterTextChange();
+                    return 0;  // 이미 [취소]함: 같은 결과 창 내용이면 다시 묻지 않음
+                }
+            }
+            g_srcHoldHash = 0;
             Reprocess();
             AfterTextChange();
         }
@@ -6234,7 +6429,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_SAVE: DoSave(); return 0;
         case ID_SAVEAS: if (!g_text.empty()) DoSaveAs(); return 0;
         case ID_BATCH: DoBatchDialog(); AfterTextChange(); return 0;
-        case ID_PASTE: if (!g_busy && ConfirmDiscardEdits()) PasteAsSource(); return 0;
+        case ID_PASTE: if (!g_busy && ConfirmLeave(L"붙여넣은 글로 바꿈")) PasteAsSource(); return 0;
         case ID_CLEAR: ClearAll(); return 0;
         case ID_COPYALL: CopyResult(); return 0;
         case ID_READ: SetReading(true); return 0;
@@ -6336,11 +6531,72 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
     case WM_CLOSE:
+        if (g_bwWnd || g_rulesWnd || g_aboutWnd) {  // 여러 파일 정리 등 보조 창이 열려 있으면 그 창부터
+            HWND pop = GetLastActivePopup(h);
+            if (pop && pop != h) SetForegroundWindow(pop);
+            return 0;
+        }
+        if (!ConfirmLeave(L"닫음")) return 0;
         if (g_fullscreen) SetFullscreen(false);
         SaveReadPos();
         SaveSettings();
         DestroyWindow(h);
         return 0;
+    case WM_QUERYENDSESSION:
+        // v2.4.6: Windows 종료·재시작·로그오프에서는 WM_CLOSE 없이 끝나므로 읽던 곳·설정을 여기서 저장.
+        // 결과 창에 저장하지 않은 고친 내용이 있으면 종료를 멈추고 이유를 알림 (Windows 화면에 표시됨).
+        SaveReadPos();
+        SaveSettings();
+        if (HasUnsavedEdits()) {
+            ShutdownBlockReasonCreate(h, L"결과 창에서 고친 내용을 아직 저장하지 않았습니다");
+            PostMessageW(h, WM_APP_ENDSAVE, 0, 0);
+            return FALSE;
+        }
+        return TRUE;
+    case WM_ENDSESSION:
+        if (wp) { SaveReadPos(); SaveSettings(); }
+        return 0;
+    case WM_APP_ENDSAVE:
+        if (HasUnsavedEdits() &&
+            MessageBoxW(h, L"Windows를 끄려고 했지만, 결과 창에서 고친 내용을 아직 저장하지 않아 멈췄습니다.\n지금 저장할까요?",
+                        L"야문 클린리더", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) == IDYES)
+            DoSave();
+        ShutdownBlockReasonDestroy(h);
+        return 0;
+    case WM_COPYDATA: {  // v2.4.6: 이미 실행 중일 때 다시 실행하면 그 파일을 이 창에서 엶
+        const COPYDATASTRUCT* cd = (const COPYDATASTRUCT*)lp;
+        if (!cd || cd->dwData != kOpenFilesMagic || cd->cbData % sizeof(wchar_t)) return FALSE;
+        auto* files = new std::vector<wstring>();
+        wstring all;
+        if (cd->cbData && cd->lpData) all.assign((const wchar_t*)cd->lpData, cd->cbData / sizeof(wchar_t));
+        for (size_t a = 0; a <= all.size();) {
+            size_t b = all.find(L'\n', a);
+            if (b == wstring::npos) b = all.size();
+            if (b > a) files->push_back(all.substr(a, b - a));
+            a = b + 1;
+        }
+        if (!PostMessageW(h, WM_APP_OPENFILES, 0, (LPARAM)files)) delete files;
+        return TRUE;
+    }
+    case WM_APP_OPENFILES: {
+        std::unique_ptr<std::vector<wstring>> files((std::vector<wstring>*)lp);
+        BringToFront();
+        std::vector<wstring> ok;
+        for (auto& f : *files) if (FileExists(f)) ok.push_back(f);
+        if (ok.empty()) return 0;
+        if (g_bwWnd || g_rulesWnd || g_aboutWnd || g_busy) {  // 다른 창이 열려 있거나 정리 중: 지금은 열지 않고 알림
+            HWND pop = GetLastActivePopup(h);
+            MessageBoxW(pop ? pop : h, (L"지금 열린 창을 닫거나 정리가 끝난 뒤 다시 열어 주세요.\n\n" + FileName(ok[0]) +
+                        (ok.size() > 1 ? L" 외 " + std::to_wstring(ok.size() - 1) + L"개" : L"")).c_str(),
+                        L"야문 클린리더", MB_ICONINFORMATION);
+            return 0;
+        }
+        std::sort(ok.begin(), ok.end(), [](const wstring& a, const wstring& b) { return StrCmpLogicalW(FileName(a).c_str(), FileName(b).c_str()) < 0; });
+        if (ok.size() == 1) { if (ConfirmLeave(L"다른 파일을 엶")) LoadFile(ok[0]); }
+        else OpenBatchWindow(ok);
+        AfterTextChange();
+        return 0;
+    }
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -6436,8 +6692,48 @@ void meas::Tick() {
 }
 #endif
 
+// v2.4.6: 한 번에 하나만 실행. 이미 실행 중이면 넘겨받은 파일을 그 창에서 열게 하고 끝냄
+// (설정·읽던 곳 기록을 여러 창이 서로 덮어쓰지 않게, 번역기의 [클린리더로 열기]도 같은 창으로).
+// 프로그램 폴더와 상관없이 같은 Windows 사용자 안에서 하나. 기존 창을 찾지 못하면 그냥 새로 실행.
+static bool HandOffToRunning() {
+    HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\YamoonCleanReader.Single");
+    if (!mtx || GetLastError() != ERROR_ALREADY_EXISTS) return false;  // 첫 실행 (핸들은 끝날 때까지 유지)
+    CloseHandle(mtx);
+    wstring payload;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (argv) {
+        for (int i = 1; i < argc; ++i) {
+            wchar_t full[MAX_PATH * 4] = {};
+            DWORD n = GetFullPathNameW(argv[i], MAX_PATH * 4, full, nullptr);
+            wstring f = (n && n < MAX_PATH * 4) ? wstring(full, n) : wstring(argv[i]);
+            if (!FileExists(f)) continue;
+            if (!payload.empty()) payload += L'\n';
+            payload += f;
+        }
+        LocalFree(argv);
+    }
+    HWND other = nullptr;
+    for (int t = 0; t < 30 && !other; ++t) {  // 막 켜지는 중이면 창이 생길 때까지 잠깐 기다림
+        other = FindWindowW(kWndClass, nullptr);
+        if (!other) Sleep(100);
+    }
+    if (!other) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(other, &pid);
+    if (pid) AllowSetForegroundWindow(pid);
+    COPYDATASTRUCT cd = {};
+    cd.dwData = kOpenFilesMagic;
+    cd.cbData = (DWORD)(payload.size() * sizeof(wchar_t));
+    cd.lpData = payload.empty() ? nullptr : (void*)payload.data();
+    DWORD_PTR res = 0;
+    if (!SendMessageTimeoutW(other, WM_COPYDATA, 0, (LPARAM)&cd, SMTO_ABORTIFHUNG, 5000, &res) || !res) return false;
+    return true;
+}
+
 int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
     g_hInst = hi;
+    if (HandOffToRunning()) return 0;
     INITCOMMONCONTROLSEX icc = {sizeof(icc), ICC_BAR_CLASSES | ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
     LoadLibraryW(L"Msftedit.dll");
@@ -6525,7 +6821,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
     wc.hIconSm = (HICON)LoadImageW(hi, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;
-    wc.lpszClassName = L"TextTidyWnd";
+    wc.lpszClassName = kWndClass;
     RegisterClassExW(&wc);
 
     int w = S(IniGet(L"w", 1320)), hh = S(IniGet(L"h", 820));
@@ -6537,7 +6833,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int nShow) {
             if (hh > ah) hh = ah;
         }
     }
-    HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, L"TextTidyWnd", kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    HWND hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, kWndClass, kAppName, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                                 CW_USEDEFAULT, CW_USEDEFAULT, w, hh, nullptr, nullptr, hi, nullptr);
     RestoreWindowPos(hwnd);
     ShowWindow(hwnd, IniGet(L"maximized", 0) ? SW_SHOWMAXIMIZED : nShow);
