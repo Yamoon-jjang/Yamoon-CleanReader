@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.4.6).
+"""Build-time checks for the current release (v2.4.7).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,9 +23,15 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.6"' in main
-assert "FILEVERSION 2,4,6,0" in rc and 'VALUE "ProductVersion", "2.4.6"' in rc
-assert "야문 클린리더 v2.4.6" in manual
+assert 'kVersion = L"2.4.7"' in main
+assert "FILEVERSION 2,4,7,0" in rc and 'VALUE "ProductVersion", "2.4.7"' in rc
+assert "야문 클린리더 v2.4.7" in manual
+assert "17. v2.4.6" in manual and "18. v2.4.7" in manual and manual.index("17. v2.4.6") < manual.index("18. v2.4.7")
+# v2.4.7: 한국어 긴 대사 기준 120자 + 짧은 문장 묶기 (다른 언어는 200자 그대로)
+assert "kLongSpeech = 200;" in engine and "kLongSpeechKo = 120;" in engine
+assert "kShortPiece = 10;" in engine and "kPackMax = 30;" in engine and "kTinyPiece = 4;" in engine
+assert "if (!ko) return merged;" in engine
+assert "120자 이상이면서 3문장 이상" in manual
 assert "v2.4.4" in manual and "16. v2.4.5" in manual and "17. v2.4.6" in manual
 assert manual.index("16. v2.4.5") < manual.index("17. v2.4.6")
 
@@ -110,10 +116,10 @@ assert "SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);\n    SendMessageW(g_dst, EM_
 assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" in main
 assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 
-# Confirm the engine still has the exact pre-optimization blob, not just a
-# superficially similar output for a few sample novels.
+# Confirm the engine is exactly the reviewed v2.4.7 blob (Korean long-speech change only),
+# not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "3f876899eaa3e017e09d2d293c61bc63bf13fae3", actual
+assert actual == "eca1e5bb89fd89693bd875d14cc7015f23abae4b", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -155,4 +161,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.4.6 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.4.7 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")

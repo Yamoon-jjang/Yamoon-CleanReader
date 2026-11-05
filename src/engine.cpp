@@ -1319,15 +1319,27 @@ bool startsTransition(const S& t) {
 }
 
 // ---------- 긴 대사 ----------
-// 따옴표 안의 대사가 길면(150자 이상이면서 세 문장 이상, 또는 100자 이상이면서 다섯 문장 이상)
-// 대사 안에서도 문장마다 줄을 바꿈. 짧은 대사는 한 줄로 둠.
+// 따옴표 안의 대사가 길면 대사 안에서도 문장마다 줄을 바꿈. 짧은 대사는 한 줄로 둠.
+// - 한국어 대사: 따옴표 안 120자 이상이면 나눔. 단, "응. 알았어. 빨리!"처럼 아주 짧은 문장이
+//   잇달아 나오면 한 줄씩 떼지 않고 몇 개씩 한 줄로 묶음. 혼자 남은 한두 마디("아." "네.")는 옆 문장에 붙임.
+//   200자 미만 대사는 묶은 뒤 세 줄 이상이 될 때만 나눔.
+// - 다른 언어 대사: 따옴표 안 200자 이상이면서 세 문장 이상이면 나눔(예전 그대로)
 // 빈 줄 없이 줄만 바꿔서 한 대사로 보이게 하고, 여는·닫는 따옴표는 첫 줄·끝 줄에 그대로 둠
-static const size_t kLongSpeech = 200;  // 이보다 짧은 대사는 한 줄로 둔다
+static const size_t kLongSpeech = 200;    // 이보다 짧은 대사는 한 줄로 둔다 (한국어 외)
+static const size_t kLongSpeechKo = 120;  // 한국어 대사 기준
+static const size_t kShortPiece = 10;     // 이 글자 수(공백·따옴표 빼고) 이하의 문장은 "아주 짧은 문장"
+static const size_t kPackMax = 30;
+static const size_t kTinyPiece = 4;       // 이 글자 수 이하의 한두 마디는 혼자 한 줄을 차지하지 않음        // 짧은 문장을 묶을 때 한 줄의 최대 글자 수(공백·따옴표 빼고)
+size_t solidLen(const S& t) {  // 공백·따옴표·보이지 않는 글자를 뺀 글자 수
+    size_t n = 0;
+    for (C c : t) if (!isWS(c) && !isInvisible(c) && !isOpenQuote(c) && !isCloseQuote(c)) ++n;
+    return n;
+}
 std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
     std::vector<TM> out;
     S v; std::vector<size_t> idx;
     visProject(x.t, v, idx);
-    if (v.size() < kLongSpeech) { out.push_back(x); return out; }
+    if (v.size() < kLongSpeechKo) { out.push_back(x); return out; }
     std::vector<char> role; int endQ = 0;
     encloseRoles(v, startQ, role, endQ);
     size_t a = 0, b = v.size();
@@ -1349,10 +1361,14 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
         a = i + 1; b = k;
         }
     }
-    if (b <= a || b - a < kLongSpeech) { out.push_back(x); return out; }
-    std::vector<Range> rs = splitSentences(v.substr(a, b - a), 0, true);
+    if (b <= a) { out.push_back(x); return out; }
+    bool ko = false;  // 대사 안에 한글이 있으면 한국어 대사
+    for (size_t k = a; k < b; ++k) if (isHangulSyl(v[k])) { ko = true; break; }
     size_t len = b - a;
-    if (!(len >= kLongSpeech && rs.size() >= 3)) { out.push_back(x); return out; }
+    if (len < (ko ? kLongSpeechKo : kLongSpeech)) { out.push_back(x); return out; }
+    std::vector<Range> rs = splitSentences(v.substr(a, b - a), 0, true);
+    if (!ko && !(len >= kLongSpeech && rs.size() >= 3)) { out.push_back(x); return out; }
+    if (ko && rs.size() < 3) { out.push_back(x); return out; }
     size_t prev = 0;
     for (size_t k = 1; k < rs.size(); ++k) {
         size_t co = idx[a + rs[k].a];
@@ -1378,7 +1394,41 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
         }
         merged.push_back(t);
     }
-    return merged;
+    if (!ko) return merged;
+    // 한국어: 아주 짧은 문장이 잇달아 나오면 몇 개씩 한 줄로 묶음
+    std::vector<TM> packed;
+    bool lastPack = false; size_t packLen = 0;
+    for (auto& t : merged) {
+        size_t n = solidLen(t.t);
+        bool shortP = n <= kShortPiece;
+        if (shortP && lastPack && !packed.empty() && packLen + n <= kPackMax) {
+            packed.back().add(U' ', t.first());
+            packed.back().add(t);
+            packLen += n;
+            continue;
+        }
+        packed.push_back(t);
+        lastPack = shortP; packLen = n;
+    }
+    // 그래도 혼자 남은 한두 마디("아." "네." "왜?")는 다음 줄 앞에 붙임(끝 줄이면 앞 줄 뒤에)
+    std::vector<TM> glued;
+    for (size_t k = 0; k < packed.size(); ++k) {
+        if (solidLen(packed[k].t) <= kTinyPiece && packed.size() > 1) {
+            if (k + 1 < packed.size()) {
+                TM t = packed[k];
+                t.add(U' ', packed[k + 1].first());
+                t.add(packed[k + 1]);
+                packed[k + 1] = t;
+                continue;
+            }
+            if (!glued.empty()) { glued.back().add(U' ', packed[k].first()); glued.back().add(packed[k]); continue; }
+        }
+        glued.push_back(packed[k]);
+    }
+    packed.swap(glued);
+    // 묶고 나서 한 줄뿐이거나, 200자 미만인데 두 줄 이하면 나누지 않음
+    if (packed.size() < 2 || (len < kLongSpeech && packed.size() < 3)) { out.clear(); out.push_back(x); return out; }
+    return packed;
 }
 }  // namespace
 
@@ -2191,7 +2241,14 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         std::vector<TM> units = splitUnits(p.x, p.startQ);
         bool firstPara = paraIdx == 1 && (!isLong || paras.size() > 1);  // 글 맨 앞의 문단(제목보다도 앞): 줄거리·소개글 자리
         bool sentencePath = opt.splitMode == 1 || (embedded && (shortDoc || firstPara)) || front;
-        if (units.size() <= 1 && !(sentencePath && visText(p.x.t).size() >= kLongSpeech)) { outP.push_back(std::move(p)); continue; }
+        // 한 덩어리 문단(대사 하나)이 120~199자 한국어 긴 대사인지 미리 확인하고, 나눈 결과는 아래에서 다시 씀
+        std::vector<TM> preSp; bool havePre = false;
+        if (units.size() == 1 && sentencePath && pv.size() >= kLongSpeechKo && pv.size() < kLongSpeech) {
+            preSp = splitLongSpeech(units[0], p.startQ); havePre = true;
+        }
+        if (units.size() <= 1 && !(sentencePath && (pv.size() >= kLongSpeech || (havePre && preSp.size() > 1)))) {
+            outP.push_back(std::move(p)); continue;
+        }
         // 짧은 글에서 서술 속에 대사가 박힌 문단(줄바꿈이 사라진 줄거리·소개글)은 문장마다 나눔.
         // 말줄임표(…… ...)는 문장 끝으로 보지 않으므로 "성해비치…… 수년 후……" 는 이어짐
         if (sentencePath) {
@@ -2208,7 +2265,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
             };
             for (size_t ui = 0; ui < units.size(); ++ui) {
                 auto& u = units[ui];
-                std::vector<TM> sp = splitLongSpeech(u, ui == 0 ? p.startQ : 0);
+                std::vector<TM> sp = (ui == 0 && havePre) ? std::move(preSp) : splitLongSpeech(u, ui == 0 ? p.startQ : 0);
                 if (sp.size() > 1) {  // 긴 대사: 대사 안에서 줄만 바꿈
                     if (!cur.t.empty()) { Para q{cur, 0, 0}; q.cont = pushed; q.soft = firstSoft; q.fromLong = srcLong; firstSoft = false; outP.push_back(q); pushed = true; cur = TM(); }
                     for (size_t k = 0; k < sp.size(); ++k) {
