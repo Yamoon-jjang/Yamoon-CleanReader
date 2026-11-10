@@ -197,9 +197,13 @@ Companion app: **[Yamoon Novel Translator](https://github.com/Yamoon-jjang/Yamoo
 
 ---
 
-## 라이선스
+## 라이선스 / License
 
 [MIT License](LICENSE) — 누구나 무료로 사용 · 수정 · 재배포할 수 있으며, 저작권 표시는 유지해야 합니다.
 실행 파일에 포함된 런타임 구성 요소의 고지는 [dist/THIRD_PARTY_NOTICES.txt](dist/THIRD_PARTY_NOTICES.txt)에 있습니다.
+
+**English** — Released under the [MIT License](LICENSE): free to use, modify and redistribute, provided the copyright notice is kept.
+Notices for the runtime components included in the executable are in [dist/THIRD_PARTY_NOTICES.txt](dist/THIRD_PARTY_NOTICES.txt).
+Provided "as is", without warranty of any kind; the author is not liable for any problems arising from its use.
 
 <div align="center"><sub>제작 · 야문 짱 &amp; Claude (협동작)</sub></div>
