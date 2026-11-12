@@ -160,6 +160,40 @@ bool isSymbolLine(const S& t) {
     return !t.empty();
 }
 
+// 그림 문자(이모지): ✅ 🍵 ❤️ 👍🏻 등. 이체 선택자·결합자·피부색 표시 포함
+bool isEmojiC(C c) {
+    if (c == 0x2605 || c == 0x2606) return false;  // ★ ☆ 는 구분선·제목 장식으로 따로 다룸
+    return (c >= 0x1F000 && c <= 0x1FAFF) || (c >= 0x2600 && c <= 0x27BF) || (c >= 0x2B50 && c <= 0x2B55) ||
+           c == 0xFE0F || c == 0x200D || c == 0x20E3 || c == 0x3030 || c == 0x303D || c == 0x3297 || c == 0x3299;
+}
+// 표의 한 줄: "| 이름 | 설명 |" (앞뒤가 | ). 다른 줄과 잇거나 문장마다 나누지 않음
+bool isTableRow(const S& t) {
+    size_t a = 0, b = t.size();
+    while (a < b && (isWS(t[a]) || isInvisible(t[a]))) ++a;
+    while (b > a && (isWS(t[b - 1]) || isInvisible(t[b - 1]))) --b;
+    if (b - a < 2 || t[a] != '|' || t[b - 1] != '|') return false;
+    return true;
+}
+// 목록 항목으로 시작하는 줄: "* 항목" "- 항목" "• 항목" "✅ 항목" "1. 항목" "2) 항목" "① 항목"
+// (앞 줄에 이어 붙이면 안 됨)
+bool isListItemStart(const S& t) {
+    size_t i = 0, n = t.size();
+    while (i < n && (isWS(t[i]) || isInvisible(t[i]))) ++i;
+    if (i >= n) return false;
+    C c = t[i];
+    auto spAfter = [&](size_t k) { return k < n && isWS(t[k]); };
+    if ((c == '*' || c == '-' || c == '+' || c == 0x2022 || c == 0x00B7 || c == 0x25E6 || c == 0x25AA || c == 0x2023 ||
+         c == 0x2043 || c == 0x25CF || c == 0x25CB || c == 0x25A0 || c == 0x25A1 || c == 0x25B6 || c == 0x25B8 ||
+         c == 0x25BA || c == 0x2192 || c == 0x2605 || c == 0x2606 || c == 0x203B) && spAfter(i + 1)) return true;
+    if (c >= 0x2460 && c <= 0x2473) return true;               // ① ~ ⑳
+    if (c == 0x2705 || c == 0x2611 || c == 0x2612 || c == 0x2714 || c == 0x2716 || c == 0x274C || c == 0x2610) return true;  // ✅ ☑ ☒ ✔ ✖ ❌ ☐
+    if (isDigit(c)) {
+        size_t k = i; while (k < n && isDigit(t[k])) ++k;
+        if (k - i <= 2 && k < n && (t[k] == '.' || t[k] == ')') && spAfter(k + 1)) return true;
+    }
+    return false;
+}
+
 bool isHeading(const S& t, int w) {
     if (t.empty() || w > 40) return false;
     C c = firstVis(t);
@@ -478,6 +512,14 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0, bool inSpeech = fa
         }
         auto jamoTail = [&](size_t q) { return q < n && p[q] >= 0x3131 && p[q] <= 0x318E; };  // "뭐해? ㅋㅋ" "좋아!ㅎㅎ" 같은 웃음·울음 표시는 앞 문장에 붙임
         if (isWS(nx)) {
+            // 문장 끝 뒤의 이모지("말씀해 주십시오! 🍵")는 앞 문장에 붙이고, 그 뒤에 글이 더 있으면 거기서 나눔
+            size_t q0 = nextNonWS(after), qe = q0;
+            while (qe < n && (isEmojiC(p[qe]) || (isWS(p[qe]) && qe + 1 < n && isEmojiC(p[nextNonWS(qe)])))) ++qe;
+            if (qe > q0 && (qe >= n || isWS(p[qe]))) {
+                if (endOk && qe < n) cutAt(nextNonWS(qe));
+                i = qe - 1;
+                continue;
+            }
             if (endOk && !(strong && jamoTail(nextNonWS(after)))) cutAt(nextNonWS(after));
         } else if (isOpenQuote(nx) && nx != '\'') {
             cutAt(after);
@@ -1919,6 +1961,10 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         }
         if (a.sym && b.sym) return true;  // "* *" / "*" 처럼 쪼개진 구분선
         if (a.sym || b.sym || a.head || b.head) return false;
+        if (isTableRow(a.t) || isTableRow(b.t)) return false;  // 표 줄은 잇지 않음
+        // 새 목록 항목은 앞 줄에 잇지 않음. 숫자 번호("1. ")는 끊긴 문장 속 숫자일 수 있으니
+        // 앞 줄도 목록 항목이거나 문장이 끝났을 때만
+        if (isListItemStart(b.t) && (!isDigit(firstVis(visText(b.t))) || isListItemStart(a.t) || endKind(a.t) != 0)) return false;
         if (!wrap && (notSentence(a) || notSentence(b))) return false;
         // 가운데 정렬로 쓴 머리말·경고문 등: 둘 다 크게 들여쓴 줄이고 앞 줄이 조사·연결 어미로 끝나면
         // 한 문장이 줄바꿈된 것 ("수험생에게 / 판매, 대여…", "인한 / 결석이…")
@@ -2233,7 +2279,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         if (!opt.replaces.empty()) p.x = visApply(p.x, [&](const TM& v) { return applyReplaces(v, opt, R.replaceHits); });
         if (!rx.empty()) p.x = visApply(p.x, [&](const TM& v) { return applyRegexTM(v, rx, R.replaceHits); });
         if (p.x.t.empty()) continue;
-        if (p.kind != 0 || opt.splitMode == 2 || listLike) { outP.push_back(std::move(p)); continue; }
+        if (p.kind != 0 || opt.splitMode == 2 || listLike || isTableRow(p.x.t)) { outP.push_back(std::move(p)); continue; }
         S pv = visText(p.x.t);
         bool isLong = (int)pv.size() > opt.longLen;
         bool embedded = autoDialogue && hasInlineDialogue(pv);  // 서술 중간에 박힌 대사

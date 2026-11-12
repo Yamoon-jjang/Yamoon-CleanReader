@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.4.7).
+"""Build-time checks for the current release (v2.4.8).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,10 +23,16 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.7"' in main
-assert "FILEVERSION 2,4,7,0" in rc and 'VALUE "ProductVersion", "2.4.7"' in rc
-assert "야문 클린리더 v2.4.7" in manual
+assert 'kVersion = L"2.4.8"' in main
+assert "FILEVERSION 2,4,8,0" in rc and 'VALUE "ProductVersion", "2.4.8"' in rc
+assert "야문 클린리더 v2.4.8" in manual
 assert "17. v2.4.6" in manual and "18. v2.4.7" in manual and manual.index("17. v2.4.6") < manual.index("18. v2.4.7")
+assert "19. v2.4.8" in manual and manual.index("18. v2.4.7") < manual.index("19. v2.4.8")
+# v2.4.8: 본문 사이 목록·표 줄은 잇지 않고, 문장 끝 이모지는 앞 문장에 붙임 (정리 결과는 tests/run_cases.py가 확인)
+assert "bool isListItemStart(const S& t)" in engine and "bool isTableRow(const S& t)" in engine and "bool isEmojiC(C c)" in engine
+assert "if (isTableRow(a.t) || isTableRow(b.t)) return false;" in engine
+assert "|| listLike || isTableRow(p.x.t)) { outP.push_back" in engine
+assert (root / "tests/run_cases.py").exists() and (root / "tests/tidy_cli.cpp").exists()
 # v2.4.7: 한국어 긴 대사 기준 120자 + 짧은 문장 묶기 (다른 언어는 200자 그대로)
 assert "kLongSpeech = 200;" in engine and "kLongSpeechKo = 120;" in engine
 assert "kShortPiece = 10;" in engine and "kPackMax = 30;" in engine and "kTinyPiece = 4;" in engine
@@ -116,10 +122,10 @@ assert "SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);\n    SendMessageW(g_dst, EM_
 assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" in main
 assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 
-# Confirm the engine is exactly the reviewed v2.4.7 blob (Korean long-speech change only),
+# Confirm the engine is exactly the reviewed v2.4.8 blob (list/table/emoji change only),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "eca1e5bb89fd89693bd875d14cc7015f23abae4b", actual
+assert actual == "5cd991beda95516c4090d1f2bf64af7a65c2e327", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -161,4 +167,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.4.7 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.4.8 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
