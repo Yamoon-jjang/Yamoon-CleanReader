@@ -1047,11 +1047,12 @@ bool isUrlLine(const S& t) {
     return rest <= 8;
 }
 
-// v2.5.0 홍보·광고 줄 ("쪽 번호·광고·HTML 제거"를 켰을 때만)
-// 1) 웹 주소가 들어 있고 홍보 낱말이 함께 있는 짧은 줄: "무료 소설 사이트 abc.com 에서 최신화 보기"
-//    (주소만 있는 줄은 위 isUrlLine이 이미 지움. 이것은 주소 앞뒤에 글이 더 붙은 줄)
-// 2) 연재 글 끝에 붙는 독자 부탁 줄: "선작과 추천 부탁드립니다!", "구독·좋아요 눌러 주세요"
-// 따옴표가 든 줄(대사)·긴 줄(본문 문장)은 건드리지 않음
+// v2.5.0 홍보·광고 줄 ("쪽 번호·광고·HTML 제거"를 켰을 때만). 본문을 지우지 않도록 아주 좁게 봄:
+// 1) 웹 주소 + 뚜렷한 홍보 말이 함께 있고, 본문 문장처럼 끝나지 않는 짧은 줄
+//    "무료 소설 사이트 abc.xyz 에서 최신화를 보세요!"   (주소만 있는 줄은 위 isUrlLine이 이미 지움)
+// 2) 연재 사이트 독자 부탁 줄이 글 안에 두 번 이상 똑같이 나올 때: "선작과 추천 부탁드립니다!"
+//    (한 번만 나오는 줄은 본문일 수 있어 남김. 방송·채팅 장면에 흔한 구독·좋아요·후원·댓글은 보지 않음)
+// 따옴표·괄호 속 말이 든 줄(대사·인용), "~다." "~까?"로 끝나는 줄(본문 서술·질문)은 지우지 않음
 bool hasCI(const S& t, const char* w) {
     size_t n = strlen(w);
     for (size_t i = 0; i + n <= t.size(); ++i) {
@@ -1079,27 +1080,32 @@ bool hasWebAddr(const S& t) {
     }
     return false;
 }
-bool isPromoLine(const S& t) {
-    if (t.empty() || t.size() > 150) return false;
-    for (C c : t) if (isOpenQuote(c) || c == 0x201D || c == 0x300D || c == 0x300F || c == 0x2019) return false;  // 대사·인용이 든 줄
-    for (const char32_t* w : {U"했다", U"었다", U"았다", U"였다", U"했었다"})  // 본문 서술 (그는 www.… 에서 검색했다.)
-        if (t.find(w) != S::npos) return false;
+// 본문 서술·질문처럼 끝나는 줄: 마지막 한글이 "다"(…했다. …한다. 단 "…니다"는 안내문)이거나 물음표로 끝남
+bool endsLikeProse(const S& t) {
+    size_t e = t.size();
+    while (e > 0 && (t[e - 1] == ' ' || t[e - 1] == '.' || t[e - 1] == '!' || t[e - 1] == '~' || t[e - 1] == 0x2026)) --e;
+    if (e > 0 && (t[e - 1] == '?' || t[e - 1] == 0xFF1F)) return true;
+    if (e > 0 && t[e - 1] == U'다') return !(e > 1 && t[e - 2] == U'니');
+    return false;
+}
+bool isPromoLine(const S& t, int sameLines) {
+    if (t.empty() || t.size() > 120) return false;
+    for (C c : t)  // 대사·인용·괄호 속 말이 든 줄
+        if (isOpenQuote(c) || c == 0x201D || c == 0x300D || c == 0x300F || c == 0x2019 || c == '(' || c == 0xFF08) return false;
+    if (endsLikeProse(t)) return false;
     if (hasWebAddr(t)) {
-        static const char32_t* ko[] = {U"무료", U"사이트", U"텍본", U"텍스트", U"다운", U"배포", U"제공", U"공유", U"방문", U"접속", U"주소", U"검색",
-                                       U"최신", U"연재", U"열람", U"업데이트", U"구독", U"카톡", U"카카오", U"오픈채팅", U"텔레그램", U"디스코드",
-                                       U"토렌트", U"링크", U"클릭", U"바로가기", U"광고", U"문의", U"이벤트", U"가입", U"소설", U"웹툰", U"보기",
-                                       U"보세요", U"읽기", U"首发", U"更新", U"最新", U"免费", U"下载", U"访问", U"网址", U"本站", U"阅读", U"閱讀",
-                                       U"無料", U"小説", nullptr};
+        static const char32_t* ko[] = {U"무료", U"사이트", U"텍본", U"다운로드", U"다운받", U"토렌트", U"오픈채팅", U"텔레그램",
+                                       U"디스코드", U"바로가기", U"최신화", U"首发", U"免费", U"下载", U"本站", U"网址", U"無料", nullptr};
         for (int k = 0; ko[k]; ++k) if (t.find(ko[k]) != S::npos) return true;
-        for (const char* w : {"free", "download", "visit", "join", "read ", "novel", "update"}) if (hasCI(t, w)) return true;
+        for (const char* w : {"free", "download"}) if (hasCI(t, w)) return true;
         return false;
     }
-    if (t.size() <= 50) {
+    if (t.size() <= 40 && sameLines >= 2) {
         bool ask = false;
-        for (const char32_t* w : {U"부탁드립니다", U"부탁드려요", U"부탁합니다", U"부탁해요", U"눌러 주세요", U"눌러주세요", U"눌러 주시면", U"눌러주시면"})
+        for (const char32_t* w : {U"부탁드립니다", U"부탁드려요", U"부탁합니다"})
             if (t.find(w) != S::npos) { ask = true; break; }
         if (!ask) return false;
-        for (const char32_t* w : {U"선작", U"선호작", U"추천", U"구독", U"좋아요", U"코멘트", U"댓글", U"후원", U"별점", U"알림 설정", U"작품 알림", U"쿠폰"})
+        for (const char32_t* w : {U"선작", U"선호작", U"추천", U"코멘트", U"별점", U"작품 알림", U"알림 설정", U"쿠폰"})
             if (t.find(w) != S::npos) return true;
     }
     return false;
@@ -1657,7 +1663,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 for (auto& re : delRx) { try { if (std::regex_search(w, re)) { kill = true; break; } } catch (...) {} }
             }
             if (!kill && opt.removeJunk) {
-                if (isUrlLine(vt) || isPromoLine(vt)) kill = true;
+                if (isUrlLine(vt) || isPromoLine(vt, (vt.size() >= 6 && vt.size() <= 60) ? freq[vt] : 0)) kill = true;
                 else if (vt.size() >= 6 && vt.size() <= 60) {
                     int f = freq[vt];
                     bool letters = false;

@@ -124,14 +124,15 @@ assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" 
 assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 
 # v2.5.0: 엔진은 홍보·광고 줄 판정(isPromoLine, "쪽 번호·광고·HTML 제거"를 켰을 때만)만 더함
-assert "bool isPromoLine(const S& t)" in engine and "if (isUrlLine(vt) || isPromoLine(vt)) kill = true;" in engine
+assert "bool isPromoLine(const S& t, int sameLines)" in engine and "if (isUrlLine(vt) || isPromoLine(vt, (vt.size() >= 6 && vt.size() <= 60) ? freq[vt] : 0)) kill = true;" in engine
+assert "if (endsLikeProse(t)) return false;" in engine and "t.size() <= 40 && sameLines >= 2" in engine   # 본문 문장·한 번만 나오는 부탁 줄은 남김
 assert engine.count("isPromoLine(") == 2                     # 정의 + 광고 옵션 안에서만 쓰임
 assert (root / "tests/cases/promo_lines_junk/options.txt").read_text().split() == ["--junk"]
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
-assert "rt::FixJosa(vis, e, rep.back(), part)" in search and "at = hh.e; }" in search          # 조사까지 바꿈
-assert "!(josa && rt::ParticleAt(vis, e))" in search                                           # 온전한 단어만 + 조사
+assert "rt::FixJosa(vis, e, q.back(), rep.back(), part)" in search and "at = hh.e; }" in search          # 조사까지 바꿈
+assert "!(josa && rt::ParticleAt(vis, e, q.back()))" in search                                           # 온전한 단어만 + 조사
 assert "LVS_OWNERDATA" in search and "RpListRefresh();" in search                              # 찾은 곳 목록 (가상 목록)
 assert "rt::CheckTocNumbers(nums, units)" in main                                              # 목차 번호 확인
 cp = body("static void ChgPaintPane(")
@@ -146,7 +147,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # Confirm the engine is exactly the reviewed v2.5.0 blob (v2.4.8 + promo-line rule only),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "2f6fcc4060f67244eb15f3c9fe044c3d4f62de86", actual
+assert actual == "d8011d78abcdf2918df1fbcebe4e5a14809160f1", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)

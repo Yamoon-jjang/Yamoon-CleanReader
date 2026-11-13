@@ -57,6 +57,16 @@ JOSA = [
     ("유나가족", "유나", "서윤", "서윤가족"),
     # 새 이름 끝이 한글이 아니면 조사는 그대로
     ("서윤은 웃었다.", "서윤", "Mary", "Mary은 웃었다."),
+    # 찾을 말의 받침과 맞지 않는 꼴은 조사가 아님 (다른 낱말을 건드리지 않음)
+    ("나이가 많다.", "나", "저", "저이가 많다."),
+    ("나는 갔다.", "나", "저", "저는 갔다."),
+    ("하늘이 맑다.", "하늘", "바다", "바다가 맑다."),
+    ("서윤가 왔다.", "서윤", "유나", "유나가 왔다."),          # (원문이 이미 틀린 꼴이면 그대로 둠)
+    ("유나은 왔다.", "유나", "서윤", "서윤은 왔다."),
+    ("유나이 웃었다.", "유나", "서윤", "서윤이 웃었다."),
+    ("유나이는", "유나", "하준", "하준이는"),
+    ("유나로 정했다.", "유나", "하늘", "하늘로 정했다."),
+    ("하늘로 정했다.", "하늘", "유나", "유나로 정했다."),
     # 여러 곳
     ("서윤은 서윤을 보고 서윤과 웃었다.", "서윤", "유나", "유나는 유나를 보고 유나와 웃었다."),
 ]
@@ -100,7 +110,7 @@ static wstring ReplaceAll(const wstring& t, const wstring& q, const wstring& rep
     wstring out; size_t at = 0, pos = 0;
     while ((pos = t.find(q, pos)) != wstring::npos) {
         size_t e = pos + q.size();
-        wstring part; size_t used = rt::FixJosa(t, e, rep.empty() ? 0 : rep.back(), part);
+        wstring part; size_t used = rt::FixJosa(t, e, q.back(), rep.empty() ? 0 : rep.back(), part);
         out.append(t, at, pos - at); out += rep; out += used ? part : wstring();
         at = e + used; pos = at;
     }

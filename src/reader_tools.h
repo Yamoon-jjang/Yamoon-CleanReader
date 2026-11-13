@@ -56,29 +56,35 @@ inline bool AfterHypoI(const std::wstring& t, size_t p) {
     for (const wchar_t* f : follow) if (At(t, p, f)) return true;
     return false;
 }
-// 이름 바로 뒤(pos)에 조사가 붙어 있는지 ("온전한 단어만"과 함께 쓸 때 조사는 단어 경계로 봄)
-inline bool ParticleAt(const std::wstring& t, size_t pos) {
-    if (pos >= t.size() || !Syl(t[pos])) return false;
+// 받침 꼴(은·을·과·이…)은 받침 있는 말 뒤에서만, 받침 없는 꼴(는·를·와·가…)은 받침 없는 말 뒤에서만 조사로 봄.
+// (찾을 말의 받침과 맞지 않는 글자는 조사가 아니라 다른 낱말: "나" 뒤의 "이가"는 "나이가")
+// 이름 바로 뒤(pos)에 조사가 붙어 있는지 ("온전한 단어만"과 함께 쓸 때 조사는 단어 경계로 봄). oldLast: 찾을 말의 끝 글자
+inline bool ParticleAt(const std::wstring& t, size_t pos, wchar_t oldLast) {
+    if (pos >= t.size() || !Syl(t[pos]) || !Syl(oldLast)) return false;
+    const bool oldB = Jong(oldLast) > 0, oldR = Jong(oldLast) == 8;
     size_t n;
     const JosaPair* k = JosaPairs(n);
     for (size_t i = 0; i < n; ++i) {
-        if (At(t, pos, k[i].c) && JosaTailOk(t, pos + Len(k[i].c))) return true;
-        if (At(t, pos, k[i].v) && JosaTailOk(t, pos + Len(k[i].v))) return true;
+        const wchar_t* f = oldB ? k[i].c : k[i].v;
+        if (At(t, pos, f) && JosaTailOk(t, pos + Len(f))) return true;
     }
-    k = CopulaPairs(n);
-    for (size_t i = 0; i < n; ++i) if (At(t, pos, k[i].c)) return true;
-    for (const wchar_t* w : {L"으로", L"로", L"이", L"가", L"아", L"야", L"의", L"도", L"만", L"에게", L"에서", L"에", L"한테", L"께",
-                             L"처럼", L"보다", L"까지", L"부터", L"조차", L"마저", L"하고", L"밖에", L"네", L"였", L"예요"})
+    if (oldB) { k = CopulaPairs(n); for (size_t i = 0; i < n; ++i) if (At(t, pos, k[i].c)) return true; }
+    if (At(t, pos, (oldB && !oldR) ? L"으로" : L"로")) return true;
+    if (At(t, pos, oldB ? L"이" : L"가") || At(t, pos, oldB ? L"아" : L"야")) return true;
+    if (!oldB && (At(t, pos, L"였") || At(t, pos, L"예요"))) return true;
+    for (const wchar_t* w : {L"의", L"도", L"만", L"에게", L"에서", L"에", L"한테", L"께", L"처럼", L"보다", L"까지", L"부터", L"조차",
+                             L"마저", L"하고", L"밖에", L"네"})
         if (At(t, pos, w)) return true;
     return false;
 }
-// 이름 바로 뒤(pos)의 조사를 새 이름 끝 글자(newLast)의 받침에 맞춤.
+// 이름 바로 뒤(pos)의 조사를 새 이름 끝 글자(newLast)의 받침에 맞춤. oldLast: 찾을 말의 끝 글자.
 // 바꿔야 하면 t[pos .. pos+반환값)을 part로 바꾸면 됨. 바꿀 것이 없으면 0.
-inline size_t FixJosa(const std::wstring& t, size_t pos, wchar_t newLast, std::wstring& part) {
+inline size_t FixJosa(const std::wstring& t, size_t pos, wchar_t oldLast, wchar_t newLast, std::wstring& part) {
     part.clear();
-    if (!Syl(newLast) || pos >= t.size() || !Syl(t[pos])) return 0;
+    if (!Syl(newLast) || !Syl(oldLast) || pos >= t.size() || !Syl(t[pos])) return 0;
     const int jg = Jong(newLast);
     const bool hasB = jg > 0, rieul = jg == 8;
+    const bool oldB = Jong(oldLast) > 0, oldR = Jong(oldLast) == 8;  // 지금 글에 쓰인 꼴은 찾을 말의 받침에 맞는 꼴이어야 조사
     auto put = [&](size_t len, const wchar_t* want, const std::wstring& rest) -> size_t {
         std::wstring w = std::wstring(want) + rest;
         if (t.compare(pos, len, w) == 0) return 0;  // 이미 맞음
@@ -87,12 +93,12 @@ inline size_t FixJosa(const std::wstring& t, size_t pos, wchar_t newLast, std::w
     };
     // 1) 으로 / 로 (ㄹ 받침 뒤는 "로")
     for (const wchar_t* tail : {L"부터", L"서", L"써", L""}) {
-        std::wstring c = std::wstring(L"으로") + tail, v = std::wstring(L"로") + tail;
-        if (At(t, pos, c.c_str())) return put(c.size(), (hasB && !rieul) ? L"으로" : L"로", tail);
-        if (At(t, pos, v.c_str())) return put(v.size(), (hasB && !rieul) ? L"으로" : L"로", tail);
+        std::wstring cur = std::wstring((oldB && !oldR) ? L"으로" : L"로") + tail;
+        if (At(t, pos, cur.c_str())) return put(cur.size(), (hasB && !rieul) ? L"으로" : L"로", tail);
     }
     size_t n;
     const JosaPair* k = JosaPairs(n);
+    if (oldB) {
     // 2) 받침 뒤 꼴로 쓰여 있음 (서윤은, 서윤이라고, 서윤이었다)
     for (size_t i = 0; i < n; ++i) {
         size_t L = Len(k[i].c);
@@ -108,6 +114,8 @@ inline size_t FixJosa(const std::wstring& t, size_t pos, wchar_t newLast, std::w
         return 0;
     }
     if (t[pos] == L'아' && (pos + 1 >= t.size() || !Syl(t[pos + 1]))) return put(1, hasB ? L"아" : L"야", L"");  // 부르는 말
+    return 0;
+    }
     // 3) 받침 없는 말 뒤 꼴로 쓰여 있음 (유나는, 유나라고, 유나였다)
     k = JosaPairs(n);
     for (size_t i = 0; i < n; ++i) {

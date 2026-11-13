@@ -97,14 +97,14 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
     auto wordOk = [&](size_t s, size_t e) {
         if (!word) return true;
         if (s > 0 && RpWordCh(vis[s - 1]) && RpWordCh(vis[s])) return false;
-        if (e < vis.size() && RpWordCh(vis[e]) && RpWordCh(vis[e - 1]) && !(josa && rt::ParticleAt(vis, e))) return false;  // 조사는 단어 경계로 봄
+        if (e < vis.size() && RpWordCh(vis[e]) && RpWordCh(vis[e - 1]) && !(josa && rt::ParticleAt(vis, e, q.back()))) return false;  // 조사는 단어 경계로 봄
         return true;
     };
     auto add = [&](size_t s, size_t e, const wstring& rep) {
         RpHit h; h.a = stripped ? vp[s] : s; h.b = stripped ? vp[e - 1] + 1 : e; h.rep = rep; h.e = h.b;
         if (josa) {  // 뒤에 붙은 조사를 바꿀 말의 받침에 맞춤 (보이는 글 기준으로 보고, 바꿀 범위를 조사 끝까지 넓힘)
             wstring part;
-            size_t used = rt::FixJosa(vis, e, rep.back(), part);
+            size_t used = rt::FixJosa(vis, e, q.back(), rep.back(), part);
             if (used) { h.e = stripped ? vp[e + used - 1] + 1 : e + used; h.rep += part; }
         }
         if (stripped) for (size_t k = h.a; k < h.e; ++k)

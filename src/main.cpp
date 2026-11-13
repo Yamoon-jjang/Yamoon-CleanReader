@@ -4641,14 +4641,22 @@ static void Layout() {
         put(g_btnPaste, cx, by, w1, bh); cx += w1 + S(2);
         put(g_btnClear, cx, by, w2, bh); cx += w2 + S(10);
         put(g_chkSync, cx, top + (headH - S(22)) / 2, checkW(g_chkSync), S(22));
-        cx += checkW(g_chkSync) + S(10);
-        put(g_chkChg, cx, top + (headH - S(22)) / 2, checkW(g_chkChg), S(22));
-        g_srcMetaLeft = cx + checkW(g_chkChg) + S(8);
+        g_srcMetaLeft = cx + checkW(g_chkSync) + S(8);
         int dx = g_rcDstHead.left + S(12) + MeasureW(g_cardFont, L"정리 결과") + S(10);
         int w3 = headBtnW(g_btnCopyAll), w4 = headBtnW(g_btnReplace);
         put(g_btnCopyAll, dx, by, w3, bh);
         put(g_btnReplace, dx + w3 + S(2), by, w4, bh);
-        g_dstMetaLeft = dx + w3 + S(2) + w4 + S(8);
+        {   // [바뀐 곳 표시]: 결과 칸 머리. 칸 머리 오른쪽 정보 글(문단 수 등)이 잘리게 되면 이름을 숨기고 네모 칸만 둠 (이름은 풍선 도움말)
+            int cx2 = dx + w3 + S(2) + w4 + S(10);
+            const wstring metaD = g_metaDst.empty() ? wstring(L"직접 고친 내용도 그대로 저장됩니다") : g_metaDst;
+            int metaW = MeasureW(g_smallFont, metaD) + S(8);
+            int full = MeasureW(g_uiFont, L"바뀐 곳 표시") + S(26), box = S(22);
+            bool roomy = cx2 + full + S(8) + metaW <= g_rcDstHead.right - S(12);
+            setText(g_chkChg, roomy ? L"바뀐 곳 표시" : L"");
+            int cw = roomy ? full : box;
+            put(g_chkChg, cx2, top + (headH - S(22)) / 2, cw, S(22));
+            g_dstMetaLeft = cx2 + cw + S(8);
+        }
         put(g_src, m + 1, top + headH, half - 2, bottom - top - headH - 1 - edBottomInset);
         put(g_dst, m + half + gap + 1, top + headH, W - m - (m + half + gap) - 2, bottom - top - headH - 1 - edBottomInset);
     }
