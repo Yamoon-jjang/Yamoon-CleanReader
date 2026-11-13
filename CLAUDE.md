@@ -2,6 +2,7 @@
 
 흐트러진 txt·EPUB의 문단을 정리하고 읽기 모드로 보여 주는 Windows 프로그램입니다.
 정리 엔진은 `src/engine.cpp`(플랫폼 독립), 화면은 `src/main.cpp`(Win32)입니다.
+찾기·바꾸기 창은 `src/search_replace.inc`, 조사 맞춤·목차 회차 번호 확인·바뀐 곳 표시의 계산은 `src/reader_tools.h`(헤더만, 플랫폼 독립)입니다.
 사용자는 자기 PC에서 빌드하지 않습니다. 빌드·릴리스는 GitHub Actions(`.github/workflows/build.yml`)가 합니다.
 
 ## "이 글이 이렇게 정리된다"는 신고를 받으면
@@ -19,7 +20,10 @@
    이 도구는 공백을 뺀 글자가 원문과 결과에서 같은지도 확인합니다.
 5. 나머지 검사도 통과해야 합니다.
    `python3 tests/verify_source_contracts.py` (엔진을 바꾸면 이 파일의 엔진 해시·버전 확인을 함께 고침),
-   `python3 tests/compare_search_242_243.py`, `python3 tests/check_toc_lines.py`
+   `python3 tests/compare_search_242_243.py`, `python3 tests/check_toc_lines.py`, `python3 tests/check_reader_tools.py`
+   (`reader_tools.h`를 고치면 `check_reader_tools.py`에 사례를 더합니다)
+6. 옵션을 켠 상태에서만 생기는 문제(예: "쪽 번호·광고·HTML 제거")는 사례 폴더에 `options.txt`(예: `--junk`)를 두면
+   그 옵션으로 정리해 비교합니다. 이런 사례는 글자 수 확인을 하지 않습니다(줄을 지우는 옵션).
 
 ## 지켜야 할 것
 

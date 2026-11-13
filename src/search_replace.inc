@@ -6,7 +6,7 @@ static bool g_rpExpanded = false;
 // 창을 닫았다 열어도 찾을 말·바꿀 말·옵션·기록은 그대로 (프로그램을 켜 둔 동안)
 static wstring g_rpLastFind, g_rpLastRepl;
 static std::vector<wstring> g_rpHistF, g_rpHistR;
-static bool g_rpOpt[4] = {false, false, false, false};
+static bool g_rpOpt[5] = {false, false, false, false, false};
 static void RpSaveState() {
     auto txt = [](HWND c) { int n = GetWindowTextLengthW(c); wstring w(n + 1, 0); GetWindowTextW(c, &w[0], n + 1); w.resize(n); return w; };
     auto hist = [](HWND c) {
@@ -24,19 +24,19 @@ static void RpSaveState() {
     };
     g_rpLastFind = txt(g_rpFind); g_rpLastRepl = txt(g_rpRepl);
     g_rpHistF = hist(g_rpFind); g_rpHistR = hist(g_rpRepl);
-    int ids[] = {ID_RP_CASE, ID_RP_WORD, ID_RP_UP, ID_RP_REGEX};
-    for (int i = 0; i < 4; ++i) g_rpOpt[i] = Checked(GetDlgItem(g_rpWnd, ids[i]));
+    int ids[] = {ID_RP_CASE, ID_RP_WORD, ID_RP_UP, ID_RP_REGEX, ID_RP_JOSA};
+    for (int i = 0; i < 5; ++i) g_rpOpt[i] = Checked(GetDlgItem(g_rpWnd, ids[i]));
 }
 static void RpLoadState(HWND h) {
     for (auto& w : g_rpHistF) SendMessageW(g_rpFind, CB_ADDSTRING, 0, (LPARAM)w.c_str());
     for (auto& w : g_rpHistR) SendMessageW(g_rpRepl, CB_ADDSTRING, 0, (LPARAM)w.c_str());
     SetWindowTextW(g_rpFind, g_rpLastFind.c_str());
     SetWindowTextW(g_rpRepl, g_rpLastRepl.c_str());
-    int ids[] = {ID_RP_CASE, ID_RP_WORD, ID_RP_UP, ID_RP_REGEX};
-    for (int i = 0; i < 4; ++i) SetToggle(GetDlgItem(h, ids[i]), g_rpOpt[i]);
+    int ids[] = {ID_RP_CASE, ID_RP_WORD, ID_RP_UP, ID_RP_REGEX, ID_RP_JOSA};
+    for (int i = 0; i < 5; ++i) SetToggle(GetDlgItem(h, ids[i]), g_rpOpt[i]);
 }
 static wstring g_rpUndoBefore, g_rpUndoAfter;  // 모두 바꾸기 되돌리기 (Ctrl+Z)
-struct RpHit { size_t a, b; wstring rep; };
+struct RpHit { size_t a, b; wstring rep; size_t e = 0; };  // a~b 찾은 말, a~e 바꿀 범위 (조사 맞춤이면 뒤 조사까지)
 // All matches are stored in ascending source order. Reuse that order for O(log N)
 // navigation rather than rescanning up to 200,000 matches on every Find click.
 static size_t RpHitFrom(const std::vector<RpHit>& hits, size_t position) {
@@ -81,6 +81,8 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
     if (q.empty()) { err = L"찾을 말을 적어 주세요."; return false; }
     bool cs = Checked(GetDlgItem(g_rpWnd, ID_RP_CASE)), word = Checked(GetDlgItem(g_rpWnd, ID_RP_WORD));
     bool rx = Checked(GetDlgItem(g_rpWnd, ID_RP_REGEX));
+    // 조사 맞춤: 일반 찾기에서 찾을 말·바꿀 말이 모두 한글로 끝날 때만 (서윤 → 유나: 서윤은 → 유나는)
+    const bool josa = !rx && Checked(GetDlgItem(g_rpWnd, ID_RP_JOSA)) && !q.empty() && rt::Syl(q.back()) && !repl.empty() && rt::Syl(repl.back());
     // 일반 글에는 보이지 않는 서식 문자가 거의 없다. 이때는 별도 위치표(글자당 size_t)를 만들지 않는다.
     bool stripped = false;
     for (wchar_t c : hay) if (IsInvisibleCh((char32_t)c)) { stripped = true; break; }
@@ -95,12 +97,17 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
     auto wordOk = [&](size_t s, size_t e) {
         if (!word) return true;
         if (s > 0 && RpWordCh(vis[s - 1]) && RpWordCh(vis[s])) return false;
-        if (e < vis.size() && RpWordCh(vis[e]) && RpWordCh(vis[e - 1])) return false;
+        if (e < vis.size() && RpWordCh(vis[e]) && RpWordCh(vis[e - 1]) && !(josa && rt::ParticleAt(vis, e))) return false;  // 조사는 단어 경계로 봄
         return true;
     };
     auto add = [&](size_t s, size_t e, const wstring& rep) {
-        RpHit h; h.a = stripped ? vp[s] : s; h.b = stripped ? vp[e - 1] + 1 : e; h.rep = rep;
-        if (stripped) for (size_t k = h.a; k < h.b; ++k)
+        RpHit h; h.a = stripped ? vp[s] : s; h.b = stripped ? vp[e - 1] + 1 : e; h.rep = rep; h.e = h.b;
+        if (josa) {  // 뒤에 붙은 조사를 바꿀 말의 받침에 맞춤 (보이는 글 기준으로 보고, 바꿀 범위를 조사 끝까지 넓힘)
+            wstring part;
+            size_t used = rt::FixJosa(vis, e, rep.back(), part);
+            if (used) { h.e = stripped ? vp[e + used - 1] + 1 : e + used; h.rep += part; }
+        }
+        if (stripped) for (size_t k = h.a; k < h.e; ++k)
             if (IsInvisibleCh((char32_t)hay[k])) h.rep += hay[k];  // 서식 문자는 남김
         hits.push_back(h);
     };
@@ -201,37 +208,41 @@ static bool RpSearch(const wstring& hay, std::vector<RpHit>& hits, wstring& err)
 // 문서 내용 변경은 SetRichText 및 결과 칸 EN_CHANGE에서 g_rpTextSerial로 감지한다.
 static wstring g_rpCacheHay, g_rpCacheFind, g_rpCacheRepl, g_rpCacheError;
 static std::vector<RpHit> g_rpCacheHits;
-static unsigned long long g_rpCacheSerial = 0;
+static unsigned long long g_rpCacheSerial = 0, g_rpCacheGen = 0;  // g_rpCacheGen: 찾은 결과가 새로 만들어질 때마다 (찾은 곳 목록이 따라감)
 static bool g_rpCacheValid = false, g_rpCacheOk = false;
-static bool g_rpCacheCase = false, g_rpCacheWord = false, g_rpCacheRegex = false;
+static bool g_rpCacheCase = false, g_rpCacheWord = false, g_rpCacheRegex = false, g_rpCacheJosa = false;
 static bool RpSearchCached(wstring& err) {
     const wstring q = RpGet(g_rpFind, g_rpFindX), t = RpGet(g_rpRepl, g_rpReplX);
     const bool cs = Checked(GetDlgItem(g_rpWnd, ID_RP_CASE));
     const bool word = Checked(GetDlgItem(g_rpWnd, ID_RP_WORD));
     const bool rx = Checked(GetDlgItem(g_rpWnd, ID_RP_REGEX));
+    const bool josa = Checked(GetDlgItem(g_rpWnd, ID_RP_JOSA));
     const bool searchChanged = !g_rpCacheValid || g_rpCacheSerial != g_rpTextSerial ||
         g_rpCacheFind != q || g_rpCacheCase != cs ||
-        g_rpCacheWord != word || g_rpCacheRegex != rx;
+        g_rpCacheWord != word || g_rpCacheRegex != rx || g_rpCacheJosa != josa;
     if (searchChanged) {
         g_rpCacheHay = RpHay();
         g_rpCacheOk = RpSearch(g_rpCacheHay, g_rpCacheHits, g_rpCacheError);
         g_rpCacheFind = q; g_rpCacheRepl = t;
-        g_rpCacheCase = cs; g_rpCacheWord = word; g_rpCacheRegex = rx;
+        g_rpCacheCase = cs; g_rpCacheWord = word; g_rpCacheRegex = rx; g_rpCacheJosa = josa;
         g_rpCacheSerial = g_rpTextSerial;
         g_rpCacheValid = true;
+        ++g_rpCacheGen;
     } else if (g_rpCacheRepl != t) {
         // Literal search positions do not depend on the replacement text.
         // Keep original invisible characters inside every match, as before.
-        if (!rx && g_rpCacheOk) {
+        if (!rx && !josa && g_rpCacheOk) {
             for (auto& h : g_rpCacheHits) {
                 h.rep = t;
-                for (size_t k = h.a; k < h.b; ++k)
+                for (size_t k = h.a; k < h.e; ++k)
                     if (IsInvisibleCh((char32_t)g_rpCacheHay[k])) h.rep += g_rpCacheHay[k];
             }
         } else {
             // Regex replacement can contain capture references ($1 etc.).
             // Re-evaluate those formats without extracting the document again.
+            // (조사 맞춤도 바꿀 말의 받침에 따라 바꿀 범위가 달라지므로 다시 찾음)
             g_rpCacheOk = RpSearch(g_rpCacheHay, g_rpCacheHits, g_rpCacheError);
+            ++g_rpCacheGen;
         }
         g_rpCacheRepl = t;
     }
@@ -401,6 +412,97 @@ static void RpReveal(long a, long b) {
     }
     ScrollToChar(g_dst, (long)SendMessageW(g_dst, EM_LINEINDEX, t, 0));
 }
+// ---------------------------------------------------------------------------
+// 찾은 곳 목록: 찾기 창 아래에 펼침. 찾은 곳마다 번호 · 글에서의 위치(%) · 그곳이 속한 회차 · 앞뒤 글.
+// 목록은 필요한 줄만 그때그때 만들어 보여 주므로(가상 목록) 찾은 곳이 수십만 곳이어도 바로 뜸.
+static HWND g_rpList = nullptr;
+static bool g_rpListOn = false;
+static unsigned long long g_rpListGen = ~0ULL;            // 목록이 보여 주는 찾은 결과
+static unsigned long long g_rpChapSerial = ~0ULL;         // 회차 표가 만들어진 글
+static std::vector<size_t> g_rpChapAt;                    // 회차 제목 줄이 시작하는 곳 (찾을 글 기준)
+static std::vector<wstring> g_rpChapName;
+static bool g_rpListSyncing = false;                      // 목록 고름을 코드에서 바꾸는 중 (이동 알림 무시)
+static void RpChapters() {  // 찾을 글에서 회차 제목 줄 (읽기 모드 목차와 같은 판별)
+    if (g_rpChapSerial == g_rpCacheSerial) return;
+    g_rpChapSerial = g_rpCacheSerial;
+    g_rpChapAt.clear(); g_rpChapName.clear();
+    const wstring& hay = g_rpCacheHay;
+    size_t a = 0;
+    for (size_t i = 0; i <= hay.size(); ++i) {
+        if (i < hay.size() && hay[i] != L'\r') continue;
+        if (i > a && i - a <= 120) {
+            U32 L = WToU32(hay.data() + a, i - a);
+            if (IsChapterLine(L, 0, L.size())) {
+                U32 t;
+                for (char32_t c : L) if (!IsInvisibleCh(c) && t.size() < 40) t += c;
+                size_t s0 = 0; while (s0 < t.size() && (t[s0] == ' ' || t[s0] == 0x3000 || t[s0] == '\t')) ++s0;
+                g_rpChapAt.push_back(a);
+                g_rpChapName.push_back(U32ToW(t.substr(s0), false));
+            }
+        }
+        a = i + 1;
+    }
+}
+static wstring RpListCell(size_t i, int col) {
+    const auto& hits = g_rpCacheHits;
+    if (i >= hits.size()) return L"";
+    const RpHit& h = hits[i];
+    const wstring& hay = g_rpCacheHay;
+    if (col == 0) return std::to_wstring(i + 1);
+    if (col == 1) {
+        int pct = hay.empty() ? 0 : (int)((double)h.a * 100.0 / (double)hay.size());
+        return std::to_wstring(pct) + L"%";
+    }
+    if (col == 2) {
+        size_t k = (size_t)(std::upper_bound(g_rpChapAt.begin(), g_rpChapAt.end(), h.a) - g_rpChapAt.begin());
+        return k ? g_rpChapName[k - 1] : wstring(L"(첫 회차 앞)");
+    }
+    // 앞뒤 글: 찾은 말을 «»로 감싸 한 줄로 (줄바꿈은 ¶ 대신 띄어쓰기, 보이지 않는 글자는 뺌)
+    auto piece = [&](size_t x, size_t y) {
+        wstring o;
+        for (size_t q = x; q < y && q < hay.size(); ++q) {
+            wchar_t c = hay[q];
+            if (IsInvisibleCh((char32_t)c)) continue;
+            if (c == L'\r' || c == L'\t') c = L' ';
+            if (c == L' ' && !o.empty() && o.back() == L' ') continue;
+            o += c;
+        }
+        return o;
+    };
+    size_t from = h.a > 14 ? h.a - 14 : 0;  // 앞 글은 짧게: 좁은 칸에서도 찾은 말이 보이게
+    if (from > 0 && from < hay.size() && hay[from] >= 0xDC00 && hay[from] <= 0xDFFF) ++from;
+    size_t to = std::min(hay.size(), h.b + 48);
+    if (to < hay.size() && to > 0 && hay[to - 1] >= 0xD800 && hay[to - 1] <= 0xDBFF) ++to;
+    wstring pre = piece(from, h.a), mid = piece(h.a, h.b), post = piece(h.b, to);
+    size_t lead = pre.find_first_not_of(L' ');
+    pre = lead == wstring::npos ? L"" : pre.substr(lead);
+    return (from > 0 ? L"…" : L"") + pre + L"«" + mid + L"»" + post + (to < hay.size() ? L"…" : L"");
+}
+static void RpListSelect(size_t idx) {  // 지금 고른 찾은 곳을 목록에서도 고름
+    if (!g_rpList || !g_rpListOn || idx >= g_rpCacheHits.size()) return;
+    g_rpListSyncing = true;
+    ListView_SetItemState(g_rpList, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(g_rpList, (int)idx, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(g_rpList, (int)idx, FALSE);
+    g_rpListSyncing = false;
+}
+static void RpListRefresh(bool force = false) {
+    if (!g_rpList || !g_rpListOn) return;
+    const bool fresh = g_rpCacheValid && g_rpCacheOk && g_rpCacheSerial == g_rpTextSerial;
+    unsigned long long gen = fresh ? g_rpCacheGen : 0;
+    if (!force && gen == g_rpListGen) return;
+    g_rpListGen = gen;
+    if (fresh) RpChapters();
+    g_rpListSyncing = true;
+    ListView_SetItemCountEx(g_rpList, fresh ? (int)g_rpCacheHits.size() : 0, LVSICF_NOSCROLL);
+    g_rpListSyncing = false;
+    InvalidateRect(g_rpList, nullptr, TRUE);
+    if (fresh && !g_rpCacheHits.empty()) {
+        CHARRANGE cr; SendMessageW(g_dst, EM_EXGETSEL, 0, (LPARAM)&cr);
+        size_t k = RpHitFrom(g_rpCacheHits, (size_t)std::max(0L, cr.cpMin));
+        if (k < g_rpCacheHits.size() && (LONG)g_rpCacheHits[k].a == cr.cpMin) RpListSelect(k);
+    }
+}
 // 찾은 곳 하나를 지금 고른 곳으로 만들고 그 자리가 보이게 함.
 // 찾은 곳 모두 표시 중에는 선택 표시를 감춰 두는데(EM_HIDESELECTION), 감춘 동안은 RichEdit가 고른 곳으로
 // 화면을 옮기지 않아 [찾기]를 눌러도 쪽이 넘어가지 않았음 — 선택 표시를 먼저 되살리고 화면은 직접 옮김
@@ -411,6 +513,14 @@ static void RpGoHit(const RpHit& hh) {
     if (!RpOnScreen((long)hh.a, (long)hh.b)) SendMessageW(g_dst, EM_SCROLLCARET, 0, 0);
     RpKeepVisible();
     RpMarkTick();  // 새로 고른 곳은 파란 바탕, 앞서 고른 곳은 노란 바탕으로 (선택 표시는 다시 감춤)
+    if (g_rpListOn && !g_rpListSyncing) RpListSelect(RpHitFrom(g_rpCacheHits, hh.a));
+}
+static void RpListPick(int i) {  // 목록에서 고른 곳으로 이동
+    if (i < 0) return;
+    if (!(g_rpCacheValid && g_rpCacheOk && g_rpCacheSerial == g_rpTextSerial)) { RpInfo(L"글이 바뀌어 목록을 새로 만듭니다."); return; }
+    if ((size_t)i >= g_rpCacheHits.size()) return;
+    RpGoHit(g_rpCacheHits[i]);
+    RpInfo(std::to_wstring(i + 1) + L" / " + std::to_wstring(g_rpCacheHits.size()) + L"곳");
 }
 static void RpRemember(HWND combo) {  // 찾은 말 기록 (이번에 켠 동안)
     wchar_t buf[1024]; GetWindowTextW(combo, buf, 1024);
@@ -474,6 +584,7 @@ static void RpReplaceOne() {
             bool ro = (GetWindowLongW(g_dst, GWL_STYLE) & ES_READONLY) != 0;  // 읽기 모드 칸은 잠깐 풀었다가 다시 잠금
             if (ro) SendMessageW(g_dst, EM_SETREADONLY, FALSE, 0);
             const wstring replacement = hh.rep;  // EN_CHANGE 중 검색 캐시가 갱신되어도 유효한 복사본
+            if (hh.e > hh.b) { bool os = g_syncing; g_syncing = true; SendMessageW(g_dst, EM_SETSEL, hh.a, hh.e); g_syncing = os; }  // 조사까지
             SendMessageW(g_dst, EM_REPLACESEL, TRUE, (LPARAM)replacement.c_str());
             if (ro) SendMessageW(g_dst, EM_SETREADONLY, TRUE, 0);
             g_dstDirty = true;
@@ -501,7 +612,7 @@ static void RpReplaceAll() {
     wstring before = GetRichText(g_dst), out;
     out.reserve(hay.size());
     size_t at = 0;
-    for (auto& hh : hits) { out.append(hay, at, hh.a - at); out += hh.rep; at = hh.b; }
+    for (auto& hh : hits) { if (hh.a < at) continue; out.append(hay, at, hh.a - at); out += hh.rep; at = hh.e; }  // (조사까지 넓힌 범위와 겹치는 곳은 건너뜀)
     out.append(hay, at, wstring::npos);
     wstring crlf;  // 칸에 넣을 글: 줄 끝 \r\n
     crlf.reserve(out.size() + out.size() / 20);
@@ -573,6 +684,7 @@ static void RpPlaceCenter(HWND w) {
     SetWindowPos(w, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 static RECT g_rpOptBox;  // 옵션 묶음 테두리
+static int RpBaseH();
 static void RpLayout(HWND h) {
     RECT rc; GetClientRect(h, &rc);
     int W = rc.right, p = S(18), lw = S(58), bw = S(132), bh = S(30), gap = S(8);
@@ -586,17 +698,30 @@ static void RpLayout(HWND h) {
     MoveWindow(g_rpFind, fx, S(18) + (bh - ch) / 2, fw, S(300), TRUE);
     MoveWindow(g_rpRepl, fx, S(18) + bh + gap + (bh - ch) / 2, fw, S(300), TRUE);
     int oy = S(18) + 2 * (bh + gap) + S(4), ow = bx - S(16) - p, cw = (ow - S(24)) / 2;
-    g_rpOptBox = {p, oy, p + ow, oy + S(66)};
+    g_rpOptBox = {p, oy, p + ow, oy + S(94)};
     MoveWindow(GetDlgItem(h, ID_RP_CASE), p + S(12), oy + S(8), cw, S(24), TRUE);
     MoveWindow(GetDlgItem(h, ID_RP_UP), p + S(12) + cw, oy + S(8), cw, S(24), TRUE);
     MoveWindow(GetDlgItem(h, ID_RP_WORD), p + S(12), oy + S(36), cw, S(24), TRUE);
     MoveWindow(GetDlgItem(h, ID_RP_REGEX), p + S(12) + cw, oy + S(36), cw, S(24), TRUE);
-    MoveWindow(g_rpInfo, p + S(2), oy + S(72), ow, S(20), TRUE);
+    MoveWindow(GetDlgItem(h, ID_RP_JOSA), p + S(12), oy + S(64), ow - S(24), S(24), TRUE);
+    MoveWindow(g_rpInfo, p + S(2), oy + S(100), ow, S(20), TRUE);
     int ids[] = {ID_RP_NEXT, ID_RP_REPLACE, ID_RP_ALL, ID_RP_COUNT, ID_RP_EXPAND};
     for (int i = 0; i < 5; ++i) MoveWindow(GetDlgItem(h, ids[i]), bx, S(18) + i * (bh + gap), bw, bh, TRUE);
-    int ey = S(18) + 5 * (bh + gap) + S(6);
+    int ey = RpBaseH() - S(4);
+    int listH = g_rpListOn ? S(272) : 0;
+    if (g_rpList) {
+        MoveWindow(g_rpList, p, ey + (g_rpExpanded ? S(300) : 0), W - p * 2, std::max(0, listH - S(14)), TRUE);
+        ShowWindow(g_rpList, g_rpListOn ? SW_SHOW : SW_HIDE);
+        int cw0 = S(46), cw1 = S(50), cw2 = S(128);
+        RECT lr; GetClientRect(g_rpList, &lr);
+        ListView_SetColumnWidth(g_rpList, 0, cw0);
+        ListView_SetColumnWidth(g_rpList, 1, cw1);
+        ListView_SetColumnWidth(g_rpList, 2, cw2);
+        // 세로 스크롤 막대 자리를 늘 빼고 잼 (목록이 길어져 막대가 생겨도 가로 막대가 생기지 않게)
+        ListView_SetColumnWidth(g_rpList, 3, std::max<int>(S(120), lr.right - cw0 - cw1 - cw2 - GetSystemMetrics(SM_CXVSCROLL) - S(2)));
+    }
     if (g_rpExpanded) {
-        int eh = (rc.bottom - ey - S(16) - S(48)) / 2;
+        int eh = (rc.bottom - listH - ey - S(16) - S(48)) / 2;
         MoveWindow(GetDlgItem(h, ID_RP_L3), p, ey, W - p * 2, S(22), TRUE);
         MoveWindow(g_rpFindX, p, ey + S(24), W - p * 2, eh, TRUE);
         MoveWindow(GetDlgItem(h, ID_RP_L4), p, ey + S(24) + eh + S(4), W - p * 2, S(22), TRUE);
@@ -608,7 +733,31 @@ static void RpLayout(HWND h) {
     EnableWindow(g_rpFind, !g_rpExpanded);
     EnableWindow(g_rpRepl, !g_rpExpanded);
 }
-static int RpClientH(bool expanded) { return S(18) + 5 * (S(30) + S(8)) + S(10) + (expanded ? S(300) : 0); }
+// 찾기 창 기본 높이: 단추 다섯 개 줄과 옵션 묶음(세 줄) + 알림 줄 중 더 긴 쪽
+static int RpBaseH() {
+    int bh = S(30), gap = S(8);
+    int buttons = S(18) + 5 * (bh + gap) - gap;
+    int left = S(18) + 2 * (bh + gap) + S(4) + S(100) + S(20);
+    return std::max(buttons, left) + S(10);
+}
+static int RpClientH(bool expanded) { return RpBaseH() + (expanded ? S(300) : 0) + (g_rpListOn ? S(272) : 0); }
+static void RpResize(HWND h) {  // 확장·목록을 켜고 끌 때 창 높이를 맞춤 (화면 아래로 넘치지 않게)
+    RECT wr; GetWindowRect(h, &wr);
+    RECT cr = {0, 0, 10, RpClientH(g_rpExpanded)};
+    AdjustWindowRectEx(&cr, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE, (DWORD)GetWindowLongW(h, GWL_EXSTYLE));
+    int nh = cr.bottom - cr.top, ny = wr.top;
+    RECT wa = RpScreenArea();
+    if (ny + nh > wa.bottom) ny = std::max<int>(wa.top, wa.bottom - nh);
+    SetWindowPos(h, nullptr, wr.left, ny, wr.right - wr.left, nh, SWP_NOZORDER);
+    RpLayout(h);
+}
+static void RpSetList(HWND h, bool on) {
+    if (on == g_rpListOn) return;
+    g_rpListOn = on;
+    SetWindowTextW(GetDlgItem(h, ID_RP_COUNT), on ? L"목록 닫기" : L"찾은 곳 목록");
+    RpResize(h);
+    if (on) { g_rpListGen = ~0ULL; RpListRefresh(true); }
+}
 static void RpSetExpanded(HWND h, bool on) {
     if (on == g_rpExpanded) return;
     // 한 줄 칸 ↔ 여러 줄 칸 내용 옮기기
@@ -619,14 +768,7 @@ static void RpSetExpanded(HWND h, bool on) {
     }
     g_rpExpanded = on;
     SetWindowTextW(GetDlgItem(h, ID_RP_EXPAND), on ? L"축소" : L"확장");
-    RECT wr; GetWindowRect(h, &wr);
-    RECT cr = {0, 0, 10, RpClientH(on)};
-    AdjustWindowRectEx(&cr, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE, (DWORD)GetWindowLongW(h, GWL_EXSTYLE));
-    int nh = cr.bottom - cr.top, ny = wr.top;
-    RECT wa = RpScreenArea();
-    if (ny + nh > wa.bottom) ny = std::max<int>(wa.top, wa.bottom - nh);  // 화면 아래로 넘치지 않게
-    SetWindowPos(h, nullptr, wr.left, ny, wr.right - wr.left, nh, SWP_NOZORDER);
-    RpLayout(h);
+    RpResize(h);  // 화면 아래로 넘치지 않게
     SetFocus(on ? g_rpFindX : g_rpFind);
     if (on) {  // 옮겨 온 글은 골라 둠: 바로 Enter를 치면 그 글 대신 줄바꿈이 들어감
         SendMessageW(g_rpFindX, EM_SETSEL, 0, -1);
@@ -693,6 +835,12 @@ static void RpRunReplaceAction(bool all) {
     if (all) RpReplaceAll();
     else RpReplaceOne();
 }
+static void RpListTheme() {
+    if (!g_rpList) return;
+    ListView_SetBkColor(g_rpList, col::field); ListView_SetTextBkColor(g_rpList, col::field); ListView_SetTextColor(g_rpList, col::text);
+    ApplyScrollTheme(g_rpList);
+    ApplyCtlTheme((HWND)SendMessageW(g_rpList, LVM_GETHEADER, 0, 0), L"DarkMode_ItemsView");
+}
 static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -727,21 +875,37 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         btn(ID_RP_WORD, L"온전한 단어만");
         btn(ID_RP_UP, L"위쪽으로 찾기");
         btn(ID_RP_REGEX, L"정규식");
+        btn(ID_RP_JOSA, L"조사 맞춤  (서윤은 → 유나는, 서윤이 → 유나가)");
         g_rpInfo = lab(ID_RP_INFO, L"", g_smallFont);
         btn(ID_RP_NEXT, L"찾기");
         btn(ID_RP_REPLACE, L"바꾸기");
         btn(ID_RP_ALL, L"모두 바꾸기");
-        btn(ID_RP_COUNT, L"횟수");
+        btn(ID_RP_COUNT, g_rpListOn ? L"목록 닫기" : L"찾은 곳 목록");
         btn(ID_RP_EXPAND, L"확장");
         lab(ID_RP_L3, L"찾을 말 (여러 줄)", g_uiFont);
         g_rpFindX = multi(ID_RP_FINDX);
         lab(ID_RP_L4, L"바꿀 말 (여러 줄)", g_uiFont);
         g_rpReplX = multi(ID_RP_REPLX);
+        g_rpList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                                   WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+                                   0, 0, 10, 10, h, (HMENU)(INT_PTR)ID_RP_HITS, g_hInst, nullptr);
+        SendMessageW(g_rpList, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
+        ListView_SetExtendedListViewStyle(g_rpList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        {
+            const wchar_t* heads[] = {L"번호", L"위치", L"회차", L"앞뒤 글"};
+            for (int c = 0; c < 4; ++c) {
+                LVCOLUMNW lc = {}; lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT; lc.fmt = c < 2 ? LVCFMT_RIGHT : LVCFMT_LEFT;
+                lc.pszText = (LPWSTR)heads[c]; lc.cx = S(60);
+                ListView_InsertColumn(g_rpList, c, &lc);
+            }
+        }
+        RpListTheme();
         RpLoadState(h);
         for (HWND c : {g_rpFind, g_rpRepl}) ApplyCtlTheme(c, L"DarkMode_CFD");
         for (HWND c : {g_rpFindX, g_rpReplX}) ApplyScrollTheme(c);
         RpLayout(h);
         SetTimer(h, 8, 60, nullptr);  // 찾은 곳 표시: 보이는 범위·글·고른 곳이 바뀌었는지 확인
+        if (g_rpListOn) { RpResize(h); RpListRefresh(true); }
         return 0;
     }
     case WM_SIZE: RpLayout(h); InvalidateRect(h, nullptr, TRUE); return 0;
@@ -758,6 +922,30 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 1;
     }
     case WM_DRAWITEM: DrawButton((const DRAWITEMSTRUCT*)lp); return TRUE;
+    case WM_NOTIFY: {
+        NMHDR* nh = (NMHDR*)lp;
+        if (nh->hwndFrom != g_rpList) break;
+        if (nh->code == LVN_GETDISPINFOW) {
+            NMLVDISPINFOW* di = (NMLVDISPINFOW*)lp;
+            if (di->item.mask & LVIF_TEXT) {
+                static wstring cell;
+                cell = RpListCell((size_t)di->item.iItem, di->item.iSubItem);
+                lstrcpynW(di->item.pszText, cell.c_str(), di->item.cchTextMax);
+            }
+            return 0;
+        }
+        if (nh->code == LVN_ITEMCHANGED && !g_rpListSyncing) {
+            NMLISTVIEW* lv = (NMLISTVIEW*)lp;
+            if ((lv->uNewState & LVIS_SELECTED) && !(lv->uOldState & LVIS_SELECTED)) RpListPick(lv->iItem);
+            return 0;
+        }
+        if (nh->code == NM_DBLCLK || nh->code == NM_RETURN) {  // 두 번 누르면 글 칸으로 (바로 읽거나 고칠 수 있게)
+            int i = ListView_GetNextItem(g_rpList, -1, LVNI_SELECTED);
+            if (i >= 0) { RpListPick(i); SetFocus(g_dst); }
+            return 0;
+        }
+        break;
+    }
     case WM_CTLCOLORSTATIC: {
         SetBkColor((HDC)wp, col::panel);
         SetTextColor((HDC)wp, GetDlgCtrlID((HWND)lp) == ID_RP_INFO ? col::okText : col::text);
@@ -774,7 +962,7 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     case WM_TIMER:
         if (wp == 7) { KillTimer(h, 7); if (!g_text.empty()) RpFindIncr(); return 0; }
-        if (wp == 8) { RpMarkTick(); return 0; }
+        if (wp == 8) { RpMarkTick(); RpListRefresh(); return 0; }
         break;
     case WM_COMMAND: {
         int id = LOWORD(wp);
@@ -785,21 +973,29 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (id == IDOK) id = ID_RP_NEXT;  // Enter: 찾기
         else if (HIWORD(wp) != BN_CLICKED) break;
-        if (g_text.empty() && id != ID_RP_LIST && id != ID_RP_EXPAND && id != ID_RP_CASE && id != ID_RP_WORD && id != ID_RP_UP && id != ID_RP_REGEX && id != ID_RP_RULE) {
+        if (g_text.empty() && id != ID_RP_LIST && id != ID_RP_EXPAND && id != ID_RP_CASE && id != ID_RP_WORD && id != ID_RP_UP && id != ID_RP_REGEX && id != ID_RP_JOSA && id != ID_RP_RULE &&
+            !(id == ID_RP_COUNT && g_rpListOn)) {
             RpInfo(L"먼저 파일을 열거나 글을 붙여넣으세요.");
             return 0;
         }
         switch (id) {
-        case ID_RP_CASE: case ID_RP_WORD: case ID_RP_UP: case ID_RP_REGEX: {
-            HWND b = GetDlgItem(h, id); SetToggle(b, !Checked(b)); return 0;
+        case ID_RP_CASE: case ID_RP_WORD: case ID_RP_UP: case ID_RP_REGEX: case ID_RP_JOSA: {
+            HWND b = GetDlgItem(h, id); SetToggle(b, !Checked(b));
+            if (id == ID_RP_JOSA && Checked(b))
+                RpInfo(Checked(GetDlgItem(h, ID_RP_REGEX)) ? L"조사 맞춤은 정규식이 아닐 때 쓰입니다."
+                                                            : L"바꿀 때 뒤에 붙은 조사를 바꿀 말의 받침에 맞춥니다. (서윤은 → 유나는)");
+            return 0;
         }
         case ID_RP_NEXT: RpFindNext(); return 0;
         case ID_RP_REPLACE: RpRunReplaceAction(false); return 0;
         case ID_RP_ALL: RpRunReplaceAction(true); return 0;
-        case ID_RP_COUNT: {
+        case ID_RP_COUNT: {  // 찾은 곳 목록 열기·닫기 (열 때 몇 곳인지도 알림)
+            if (g_rpListOn) { RpSetList(h, false); return 0; }
             wstring err;
-            if (!RpSearchCached(err)) RpInfo(err);
-            else RpInfo(g_rpCacheHits.empty() ? L"찾는 말이 없습니다." : std::to_wstring(g_rpCacheHits.size()) + L"곳 있습니다." + (g_preview && !g_reading ? L"  (화면에 보이는 앞부분 기준)" : L""));
+            if (!RpSearchCached(err)) { RpInfo(err); return 0; }
+            if (!g_rpExpanded) RpRemember(g_rpFind);
+            RpInfo(g_rpCacheHits.empty() ? L"찾는 말이 없습니다." : std::to_wstring(g_rpCacheHits.size()) + L"곳 있습니다. 목록에서 고르면 그곳으로 갑니다." + (g_preview && !g_reading ? L"  (화면에 보이는 앞부분 기준)" : L""));
+            RpSetList(h, true);
             return 0;
         }
         case ID_RP_RULE: RpAddRule(); return 0;
@@ -820,6 +1016,8 @@ static LRESULT CALLBACK RpProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         g_rpCacheValid = false;
         wstring().swap(g_rpCacheHay);
         std::vector<RpHit>().swap(g_rpCacheHits);  // 큰 파일 검색 메모리는 창을 닫으면 반환
+        g_rpList = nullptr; g_rpListGen = ~0ULL; g_rpChapSerial = ~0ULL;
+        std::vector<size_t>().swap(g_rpChapAt); std::vector<wstring>().swap(g_rpChapName);
         g_rpWnd = nullptr; g_rpExpanded = false; SetFocus(g_dst); return 0;
     }
     return DefWindowProcW(h, msg, wp, lp);

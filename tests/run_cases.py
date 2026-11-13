@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """정리 엔진 회귀 시험 모음.
 
-tests/cases/<사례>/input.txt 를 기본 옵션으로 정리한 결과가
+tests/cases/<사례>/input.txt 를 기본 옵션(사례 폴더에 options.txt가 있으면 그 옵션)으로 정리한 결과가
 tests/cases/<사례>/expected.txt 와 글자 하나까지 같은지 확인합니다.
 input.txt는 UTF-8로 저장합니다(앱이 하는 인코딩 판별은 이 시험의 대상이 아님).
 엔진(src/engine.cpp)을 고칠 때마다 반드시 돌립니다. GitHub 빌드에서도 exe를 만들기 전에 돌립니다.
@@ -31,8 +31,14 @@ def build(td):
     return exe
 
 
-def tidy(exe, data):
-    return subprocess.run([str(exe)], input=data, capture_output=True, check=True, timeout=120).stdout
+def tidy(exe, data, opts=()):
+    return subprocess.run([str(exe), *opts], input=data, capture_output=True, check=True, timeout=120).stdout
+
+
+def options(d):
+    # 사례 폴더에 options.txt가 있으면 그 옵션으로 정리 (예: --junk). 없으면 기본 옵션
+    f = d / "options.txt"
+    return f.read_text(encoding="utf-8").split() if f.exists() else []
 
 
 def solid(b):
@@ -47,7 +53,7 @@ def main():
         exe = build(td)
         if new:
             d = cases / new
-            out = tidy(exe, (d / "input.txt").read_bytes())
+            out = tidy(exe, (d / "input.txt").read_bytes(), options(d))
             (d / "expected.txt").write_bytes(out)
             print(out.decode("utf-8"))
             print(f"[만듦] {d / 'expected.txt'} — 결과가 맞는지 확인하세요")
@@ -57,14 +63,15 @@ def main():
         for d in dirs:
             src = (d / "input.txt").read_bytes()
             want = (d / "expected.txt").read_bytes()
-            got = tidy(exe, src)
+            opts = options(d)
+            got = tidy(exe, src, opts)
             if got != want:
                 fails += 1
                 print(f"[실패] {d.name}")
                 diff = difflib.unified_diff(want.decode("utf-8").splitlines(), got.decode("utf-8").splitlines(),
                                             "expected", "now", lineterm="")
                 print("\n".join(list(diff)[:60]))
-            if solid(src) != solid(got):
+            if not opts and solid(src) != solid(got):  # (줄을 지우는 옵션을 켠 사례는 글자 수가 줄어드는 것이 정상)
                 fails += 1
                 print(f"[실패] {d.name}: 공백을 뺀 글자가 원문과 다름 (글자가 사라지거나 생김)")
         print(f"정리 엔진 시험 {len(dirs)}개 중 실패 {fails}개")

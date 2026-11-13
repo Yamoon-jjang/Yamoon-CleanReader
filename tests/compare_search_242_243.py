@@ -40,6 +40,7 @@ def sources(src):
     return struct_and_word + fold + extra + find + cache
 
 prefix = r"""
+#include "%READER_TOOLS%"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -53,14 +54,14 @@ using std::wstring;
 using std::size_t;
 using std::vector;
 static int g_rpFind=11, g_rpFindX=12, g_rpRepl=13, g_rpReplX=14, g_rpWnd=15;
-static const int ID_RP_CASE=21, ID_RP_WORD=22, ID_RP_REGEX=23;
+static const int ID_RP_CASE=21, ID_RP_WORD=22, ID_RP_REGEX=23, ID_RP_JOSA=24;
 static wstring query, replacement, document;
-static bool opt_case=false, opt_word=false, opt_regex=false;
+static bool opt_case=false, opt_word=false, opt_regex=false, opt_josa=false;  // v2.5.0 조사 맞춤 (꺼 두면 예전과 같아야 함)
 static unsigned long long g_rpTextSerial=1;
 static size_t hay_reads=0;
 static int GetDlgItem(int, int v) { return v; }
 static bool Checked(int v) {
-    return v == ID_RP_CASE ? opt_case : v == ID_RP_WORD ? opt_word : opt_regex;
+    return v == ID_RP_CASE ? opt_case : v == ID_RP_WORD ? opt_word : v == ID_RP_JOSA ? opt_josa : opt_regex;
 }
 static wstring RpGet(int v, int) {
     wstring s = v == g_rpFind ? query : replacement, o;
@@ -157,10 +158,33 @@ int main() {
       auto doc=wstring(4048,L'x')+L" ab ab foo\rbar\r" + wstring(4000,L'a')+L" ab";
       one(doc,q,L"$1\rend",false,false,true);
   }
-  std::cout<<"PASS: "<<trials<<" differential scenarios, replacement cache transitions and all-replace-equivalence\n";
+  // v2.5.0 조사 맞춤을 켰을 때 (새 코드만): 바꿀 범위 a~e, 보이지 않는 서식 문자 보존, 온전한 단어만과 함께
+  {
+    auto run=[&](const wstring& doc,const wstring& q,const wstring& r,bool word)->wstring{
+      document=doc;query=q;replacement=r;opt_case=false;opt_word=word;opt_regex=false;opt_josa=true;
+      neo::g_rpCacheValid=false;++g_rpTextSerial;wstring er;
+      if(!neo::RpSearchCached(er)) {std::wcerr<<L"josa search failed\n";std::abort();}
+      wstring out;size_t at=0;
+      for(const auto& h:neo::g_rpCacheHits){ if(h.a<at) continue; assert(h.e>=h.b); out.append(doc,at,h.a-at);out+=h.rep;at=h.e; }
+      out.append(doc,at,wstring::npos);opt_josa=false;return out;
+    };
+    assert(run(L"서윤은 서윤을 보고 서윤과 웃었다. 서윤이가 왔다.",L"서윤",L"유나",false)==L"유나는 유나를 보고 유나와 웃었다. 유나가 왔다.");
+    assert(run(L"서윤은 서윤희를 보았다.",L"서윤",L"유나",true)==L"유나는 서윤희를 보았다.");   // 온전한 단어만: 조사는 경계, 다른 이름은 아님
+    assert(run(L"서윤\u200B은 웃었다.",L"서윤",L"유나",false)==L"유나는\u200B 웃었다.");      // 서식 문자는 남김
+    assert(run(L"유나가 왔다.",L"유나",L"서윤",false)==L"서윤이 왔다.");
+    assert(run(L"서윤은 웃었다.",L"서윤",L"Mary",false)==L"Mary은 웃었다.");                 // 한글로 끝나지 않으면 그대로
+    // 바꿀 말만 바꿔도(같은 찾을 말) 조사 범위가 새로 계산됨
+    document=L"서윤은 웃었다.";query=L"서윤";replacement=L"유나";opt_josa=true;opt_word=false;opt_regex=false;
+    neo::g_rpCacheValid=false;++g_rpTextSerial;wstring er;neo::RpSearchCached(er);
+    assert(neo::g_rpCacheHits.size()==1 && neo::g_rpCacheHits[0].rep==L"유나는");
+    replacement=L"하준";neo::RpSearchCached(er);
+    assert(neo::g_rpCacheHits.size()==1 && neo::g_rpCacheHits[0].rep==L"하준" && neo::g_rpCacheHits[0].e==neo::g_rpCacheHits[0].b);
+    opt_josa=false;
+  }
+  std::cout<<"PASS: "<<trials<<" differential scenarios, replacement cache transitions and all-replace-equivalence (+ 조사 맞춤)\n";
 }
 """
-cpp=prefix+"\nnamespace old {\n"+sources(baseline)+"}\nnamespace neo {\n"+sources(candidate)+"}\n"+tail
+cpp=prefix.replace("%READER_TOOLS%", (root / "src/reader_tools.h").as_posix())+"\nnamespace old {\n"+sources(baseline)+"}\nnamespace neo {\n"+sources(candidate)+"}\n"+tail
 with tempfile.TemporaryDirectory() as td:
     source=Path(td)/"search_compare.cpp"
     exe=Path(td)/"search_compare"

@@ -5,6 +5,7 @@
 #include <regex>
 #include <map>
 #include <algorithm>
+#include <cstring>
 
 namespace {
 
@@ -1046,6 +1047,64 @@ bool isUrlLine(const S& t) {
     return rest <= 8;
 }
 
+// v2.5.0 홍보·광고 줄 ("쪽 번호·광고·HTML 제거"를 켰을 때만)
+// 1) 웹 주소가 들어 있고 홍보 낱말이 함께 있는 짧은 줄: "무료 소설 사이트 abc.com 에서 최신화 보기"
+//    (주소만 있는 줄은 위 isUrlLine이 이미 지움. 이것은 주소 앞뒤에 글이 더 붙은 줄)
+// 2) 연재 글 끝에 붙는 독자 부탁 줄: "선작과 추천 부탁드립니다!", "구독·좋아요 눌러 주세요"
+// 따옴표가 든 줄(대사)·긴 줄(본문 문장)은 건드리지 않음
+bool hasCI(const S& t, const char* w) {
+    size_t n = strlen(w);
+    for (size_t i = 0; i + n <= t.size(); ++i) {
+        size_t k = 0;
+        for (; k < n; ++k) { C c = t[i + k]; if (c >= 'A' && c <= 'Z') c += 32; if (c != (C)(unsigned char)w[k]) break; }
+        if (k == n) return true;
+    }
+    return false;
+}
+bool hasWebAddr(const S& t) {
+    for (const char* k : {"http://", "https://", "www.", "t.me/", "open.kakao", "discord.gg", "bit.ly/"}) if (hasCI(t, k)) return true;
+    // 낱말.com 같은 도메인 (앞은 영문·숫자·-, 뒤는 영문이 이어지지 않음)
+    static const char* tld[] = {"com", "net", "org", "kr", "me", "io", "xyz", "cc", "tv", "link", "site", "top", "club", "info", "biz", "shop", "app", "to", "gg", "ly", nullptr};
+    auto al = [](C c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
+    auto an = [&](C c) { return al(c) || (c >= '0' && c <= '9') || c == '-'; };
+    for (size_t i = 1; i + 2 < t.size(); ++i) {
+        if (t[i] != '.' || !an(t[i - 1])) continue;
+        size_t b = i; while (b > 0 && an(t[b - 1])) --b;
+        if (i - b < 2) continue;
+        for (int k = 0; tld[k]; ++k) {
+            size_t n = strlen(tld[k]), j = i + 1, q = 0;
+            for (; q < n && j + q < t.size(); ++q) { C c = t[j + q]; if (c >= 'A' && c <= 'Z') c += 32; if (c != (C)(unsigned char)tld[k][q]) break; }
+            if (q == n && (j + n >= t.size() || !al(t[j + n]))) return true;
+        }
+    }
+    return false;
+}
+bool isPromoLine(const S& t) {
+    if (t.empty() || t.size() > 150) return false;
+    for (C c : t) if (isOpenQuote(c) || c == 0x201D || c == 0x300D || c == 0x300F || c == 0x2019) return false;  // 대사·인용이 든 줄
+    for (const char32_t* w : {U"했다", U"었다", U"았다", U"였다", U"했었다"})  // 본문 서술 (그는 www.… 에서 검색했다.)
+        if (t.find(w) != S::npos) return false;
+    if (hasWebAddr(t)) {
+        static const char32_t* ko[] = {U"무료", U"사이트", U"텍본", U"텍스트", U"다운", U"배포", U"제공", U"공유", U"방문", U"접속", U"주소", U"검색",
+                                       U"최신", U"연재", U"열람", U"업데이트", U"구독", U"카톡", U"카카오", U"오픈채팅", U"텔레그램", U"디스코드",
+                                       U"토렌트", U"링크", U"클릭", U"바로가기", U"광고", U"문의", U"이벤트", U"가입", U"소설", U"웹툰", U"보기",
+                                       U"보세요", U"읽기", U"首发", U"更新", U"最新", U"免费", U"下载", U"访问", U"网址", U"本站", U"阅读", U"閱讀",
+                                       U"無料", U"小説", nullptr};
+        for (int k = 0; ko[k]; ++k) if (t.find(ko[k]) != S::npos) return true;
+        for (const char* w : {"free", "download", "visit", "join", "read ", "novel", "update"}) if (hasCI(t, w)) return true;
+        return false;
+    }
+    if (t.size() <= 50) {
+        bool ask = false;
+        for (const char32_t* w : {U"부탁드립니다", U"부탁드려요", U"부탁합니다", U"부탁해요", U"눌러 주세요", U"눌러주세요", U"눌러 주시면", U"눌러주시면"})
+            if (t.find(w) != S::npos) { ask = true; break; }
+        if (!ask) return false;
+        for (const char32_t* w : {U"선작", U"선호작", U"추천", U"구독", U"좋아요", U"코멘트", U"댓글", U"후원", U"별점", U"알림 설정", U"작품 알림", U"쿠폰"})
+            if (t.find(w) != S::npos) return true;
+    }
+    return false;
+}
+
 // 이어진 글 속 회차 제목 위치: "… 했다. 제2화 …", "… 끝. 3화 …", "Chapter 4"
 bool chapterAt(const S& t, size_t i, size_t& len, bool mid = false) {
     size_t j = i, n = t.size();
@@ -1598,7 +1657,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 for (auto& re : delRx) { try { if (std::regex_search(w, re)) { kill = true; break; } } catch (...) {} }
             }
             if (!kill && opt.removeJunk) {
-                if (isUrlLine(vt)) kill = true;
+                if (isUrlLine(vt) || isPromoLine(vt)) kill = true;
                 else if (vt.size() >= 6 && vt.size() <= 60) {
                     int f = freq[vt];
                     bool letters = false;

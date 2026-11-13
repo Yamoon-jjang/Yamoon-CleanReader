@@ -36,6 +36,7 @@ jobs:
           python3 tests/compare_search_242_243.py
           python3 tests/check_toc_lines.py
           python3 tests/run_cases.py
+          python3 tests/check_reader_tools.py
 
   recent-windows:
     runs-on: windows-2022
@@ -79,6 +80,7 @@ jobs:
           python3 tests/compare_search_242_243.py
           python3 tests/check_toc_lines.py
           python3 tests/run_cases.py
+          python3 tests/check_reader_tools.py
       - name: Build YamoonCleanReader.exe
         working-directory: src
         run: |

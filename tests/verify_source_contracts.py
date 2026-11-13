@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.4.8).
+"""Build-time checks for the current release (v2.5.0).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,9 +23,10 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.4.8"' in main
-assert "FILEVERSION 2,4,8,0" in rc and 'VALUE "ProductVersion", "2.4.8"' in rc
-assert "야문 클린리더 v2.4.8" in manual
+assert 'kVersion = L"2.5.0"' in main
+assert "FILEVERSION 2,5,0,0" in rc and 'VALUE "ProductVersion", "2.5.0"' in rc
+assert "야문 클린리더 v2.5.0" in manual
+assert "20. v2.5.0" in manual and manual.index("19. v2.4.8") < manual.index("20. v2.5.0")
 assert "17. v2.4.6" in manual and "18. v2.4.7" in manual and manual.index("17. v2.4.6") < manual.index("18. v2.4.7")
 assert "19. v2.4.8" in manual and manual.index("18. v2.4.7") < manual.index("19. v2.4.8")
 # v2.4.8: 본문 사이 목록·표 줄은 잇지 않고, 문장 끝 이모지는 앞 문장에 붙임 (정리 결과는 tests/run_cases.py가 확인)
@@ -103,7 +104,7 @@ assert "[위치 확인]" not in main and "위치 확인]" not in manual.split(" 
 assert "missing[k] ? MF_GRAYED" in main                      # 옮겨지거나 지워진 최근 파일은 회색
 assert "if (c == L'&') o += L\"&&\";" in main               # 메뉴 제목의 & 를 그대로 표시
 assert "ch = L'+'" not in main
-assert main.count("SwallowMenuReclick((HWND)lp)") == 4       # 목차·책갈피·최근·테마 단추 다시 누르면 닫힘
+assert main.count("SwallowMenuReclick((HWND)lp)") == 5       # 목차·책갈피·자동 넘김·최근·테마 단추 다시 누르면 닫힘
 assert "TrackPopupMenu(m, flags | TPM_RETURNCMD" in main
 assert "RpPlaceCenter(rw)" in search and "if (g_rpWnd) RpPlaceCenter(g_rpWnd)" in main
 assert "id == ID_RP_NEXT || id == ID_RL_OK" not in main      # [찾기] 단추는 색 채움 없음
@@ -122,10 +123,30 @@ assert "SendMessageW(g_dst, EM_SETSEL, hh.a, hh.b);\n    SendMessageW(g_dst, EM_
 assert "E_EUCJP" in main and "case E_GBK: return 54936;" in main and "readenc2" in main
 assert "일본어 (EUC-JP)" in main and "EUC-JP" in manual and "GB18030" in manual and "모두 바탕색으로" in manual
 
-# Confirm the engine is exactly the reviewed v2.4.8 blob (list/table/emoji change only),
+# v2.5.0: 엔진은 홍보·광고 줄 판정(isPromoLine, "쪽 번호·광고·HTML 제거"를 켰을 때만)만 더함
+assert "bool isPromoLine(const S& t)" in engine and "if (isUrlLine(vt) || isPromoLine(vt)) kill = true;" in engine
+assert engine.count("isPromoLine(") == 2                     # 정의 + 광고 옵션 안에서만 쓰임
+assert (root / "tests/cases/promo_lines_junk/options.txt").read_text().split() == ["--junk"]
+# v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
+tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
+assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
+assert "rt::FixJosa(vis, e, rep.back(), part)" in search and "at = hh.e; }" in search          # 조사까지 바꿈
+assert "!(josa && rt::ParticleAt(vis, e))" in search                                           # 온전한 단어만 + 조사
+assert "LVS_OWNERDATA" in search and "RpListRefresh();" in search                              # 찾은 곳 목록 (가상 목록)
+assert "rt::CheckTocNumbers(nums, units)" in main                                              # 목차 번호 확인
+cp = body("static void ChgPaintPane(")
+assert "doc->Undo(tomSuspend, nullptr)" in cp and "tomAutoColor" in cp and "RoUnlock" in cp    # 바뀐 곳 표시: 되돌리기 기록에 남기지 않음
+assert "if (k == 1 && (g_dstDirty || g_rpWnd)) return false;" in body("static bool ChgReady(")  # 찾기 창이 열리면 결과 칸은 양보
+assert "ChgModeSwitch(on);" in body("static void SetReading(bool on) {") and "if (!on) AutoStop(nullptr);" in body("static void SetReading(bool on) {")
+assert "AutoStop(nullptr);" in body("static void ShowSource() {")                                # 새 글을 열면 자동 넘김 멈춤
+assert "kColorCustom = 9;" in main and "vcolor3" in main and "v3 = v2 == 8 ? kColorCustom : v2;" in main  # 예전 사용자 지정 배색 이어 쓰기
+assert "case WM_XBUTTONUP:\n            return TRUE;" in main
+assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                                      # 새 버전 확인: 브라우저로 열기만
+
+# Confirm the engine is exactly the reviewed v2.5.0 blob (v2.4.8 + promo-line rule only),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "5cd991beda95516c4090d1f2bf64af7a65c2e327", actual
+assert actual == "2f6fcc4060f67244eb15f3c9fe044c3d4f62de86", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -167,4 +188,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.4.8 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.5.0 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")

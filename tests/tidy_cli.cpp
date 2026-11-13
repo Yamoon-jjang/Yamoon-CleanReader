@@ -1,4 +1,4 @@
-// 시험용 명령줄 도구: 표준 입력(UTF-8) 글을 기본 옵션으로 정리해 표준 출력(UTF-8)으로 냄.
+// 시험용 명령줄 도구: 표준 입력(UTF-8) 글을 기본 옵션(또는 명령줄 옵션)으로 정리해 표준 출력(UTF-8)으로 냄.
 // 배포판(exe)에는 들어가지 않음 — tests/run_cases.py가 src/engine.cpp와 함께 빌드해 씀.
 #include "../src/engine.h"
 #include <cstdio>
@@ -30,9 +30,11 @@ static std::string Enc(const std::u32string& s) {
     }
     return r;
 }
-int main() {
+int main(int argc, char** argv) {
     std::string in((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
     TidyOptions opt;
+    // 사례 폴더의 options.txt에 적은 옵션 (없으면 기본 옵션): --junk = "쪽 번호·광고·HTML 제거" 켬
+    for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--junk") opt.removeJunk = true;
     TidyReport rep;
     std::cout << Enc(TidyProcess(Dec(in), opt, &rep));
     return 0;

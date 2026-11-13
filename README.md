@@ -2,6 +2,8 @@
 
 # 야문 클린리더
 
+> **v2.5.0 읽기·찾기·정리 확인 기능 보강**: 찾기·바꾸기에 **조사 맞춤**(인물 이름을 바꾸면 `서윤은 → 유나는`, `서윤이 → 유나가`처럼 조사도 함께)과 **찾은 곳 목록**(위치 · 회차 · 앞뒤 글), 정리 모드에 **바뀐 곳 표시**(지운 글자 분홍 · 달라진 글자 연두), 읽기 모드에 **자동 넘김** · **문단 들여쓰기** · **전자잉크 배색** · **목차의 빠진·겹친 회차 번호 알림** · 마우스 휠 단추·옆 단추 쪽 넘김, **마지막 글 이어서 열기**를 더했습니다. "쪽 번호·광고·HTML 제거"는 홍보·광고 줄과 "선작·추천 부탁" 줄도 지웁니다. 이 옵션을 켜지 않은 글의 정리 결과와 읽기 모드 속도는 v2.4.8과 같습니다.
+>
 > **v2.4.8 목록·표·이모지 정리 보완**: 소설 앞뒤의 소개글처럼 목록·표·이모지가 섞인 글에서, `* 항목`·`✅ 항목` 같은 **목록 줄이 한 줄로 합쳐지던 것**, `| 이름 | 설명 |` 같은 **표가 합쳐지거나 칸 안에서 줄이 바뀌어 깨지던 것**, "말씀해 주세요! 🍵"처럼 **문장 끝 이모지가 따로 떨어지던 것**을 고쳤습니다. 그 밖의 글의 정리 결과와 읽기 모드 속도는 v2.4.7과 같습니다.
 >
 > **v2.4.7 한국어 긴 대사 줄바꿈 보완**: [문장마다 줄바꿈]에서 150~190자쯤의 한국어 대사가 여러 문장이어도 한 덩어리로 남던 것을, **120자 이상이면 대사 안에서 문장마다 줄을 바꾸도록** 고쳤습니다. "응. 알았어. 빨리!"처럼 아주 짧은 문장은 몇 개씩 묶고, 혼자 낀 한두 마디는 옆 문장에 붙여 **지나치게 잘게 쪼개지지 않습니다**. 서술 문장과 외국어 글의 정리 결과, 읽기 모드 속도는 v2.4.6과 같습니다.
@@ -112,8 +114,9 @@
 
 - **쪽 넘김** — 글의 아래쪽·오른쪽 끝을 클릭하면 다음 쪽, 위쪽·왼쪽 끝을 클릭하면 앞쪽. 화면 맨 아래 줄이 다음 쪽의 맨 위 줄이 되어 읽던 줄을 놓치지 않습니다. Space · Page Down · → 키도 됩니다.
 - **읽던 곳 기억** — 파일마다 읽던 위치를 기억해, 다시 열면 그곳으로 돌아갑니다. 지금까지 읽은 양은 %로 표시됩니다.
-- **목차 · 책갈피 · 찾기** — "제1화", "프롤로그" 같은 회차 제목을 찾아 목차를 만들고, 파일마다 책갈피를 남깁니다.
-- **눈이 편한 화면** — 배색 8가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 …)를 색 견본으로 보고 고르기, 사용자 지정 색, 글꼴 · 크기 · 굵게 · 줄 간격(좁게~아주 넓게) · 여백 조절, Ctrl+휠로 글자 크기. 아이콘 버튼에 마우스를 올리면 이름이 나옵니다.
+- **목차 · 책갈피 · 찾기** — "제1화", "프롤로그" 같은 회차 제목을 찾아 목차를 만들고, **빠진 회차 번호와 겹친 번호를 알려 줍니다**. 파일마다 책갈피를 남깁니다.
+- **자동 넘김** — 5~60초 가운데 고른 간격으로 다음 쪽. 직접 넘기면 다시 세고, 글 끝에서 멈춥니다. 마우스 휠 단추 · 옆 단추로도 쪽을 넘깁니다.
+- **눈이 편한 화면** — 배색 9가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 · 전자잉크 …)를 색 견본으로 보고 고르기, 사용자 지정 색, 글꼴 · 크기 · 굵게 · 문단 들여쓰기 · 줄 간격(좁게~아주 넓게) · 여백 조절, Ctrl+휠로 글자 크기. 아이콘 버튼에 마우스를 올리면 이름이 나옵니다.
 - **전체 화면(F11)** — 도구줄을 모두 숨기고 글만 화면 가득. 큰 글도 처음부터 끝까지 이어서 읽습니다.
 
 ## 주요 기능
@@ -131,7 +134,8 @@
 - 연속 공백 · 전각 공백 · 탭 · 한글 채움 문자 정리, 문장부호 앞 공백 제거, 빠진 공백 넣기
 - `ㅋㅋ` · `ㅎㅎ` · `ㅠㅠ`처럼 문장 끝에 붙인 말은 앞 문장에 붙여 두기
 - 분리된 자모 결합, 글자마다 띄어 쓴 글 복원, 괄호 속 한자 삭제, 전각 → 반각
-- 쪽 번호 · 반복 머리글 · 광고 · 주소 줄 · HTML 찌꺼기 제거, 사용자 규칙(정규식 포함)
+- 쪽 번호 · 반복 머리글 · 광고 · 주소 줄 · HTML 찌꺼기 제거(웹 주소가 든 홍보 줄, "선작·추천 부탁" 줄 포함), 사용자 규칙(정규식 포함)
+- **바뀐 곳 표시** — 정리하며 지운 글자는 원본 칸에 분홍, 원문과 달라진 글자는 결과 칸에 연두로 (화면에 보이는 부분만 칠해 큰 글도 빠름)
 
 **파일**
 - 인코딩 자동 판별 — UTF-8 · UTF-16(LE/BE, BOM 유무) · CP949/EUC-KR · 조합형(Johab) · Shift-JIS · EUC-JP · GBK/GB2312/GB18030 · Big5 · Windows-1250~1258 · KOI8-R · Windows-874 — 저장할 때도 같은 인코딩으로
@@ -139,12 +143,12 @@
 - **EPUB 전자책** — 본문 글을 차례대로 꺼내 정리 · 읽기 (DRM이 걸린 책 제외, 추가 프로그램 없이 직접 처리)
 - 최대 100MB, 여러 파일 한꺼번에 변환, 원본은 그대로 두고 `_정리.txt`로 따로 저장
 - 원본 칸에서 클릭한 곳이 결과 칸의 같은 위치로 따라가는 연동 보기
-- 찾기 · 바꾸기 — 여러 줄 칸으로 빈 줄 개수까지 바꾸기. 같은 조건의 반복 검색 결과 재사용으로 지연을 줄임. **큰 파일의 정리 미리보기에서는 바꾸기 버튼을 누르면 먼저 동의를 받고, 승인 시 검색 조건을 유지한 채 읽기 모드로 전환해 작업을 수행**
-- 최근 파일 20개 — 몇 %까지 읽었는지 함께 표시. 옮겨지거나 지워진 파일은 회색으로 표시(목록에는 남아 있어 드라이브를 다시 연결하면 바로 열림)
+- 찾기 · 바꾸기 — **조사 맞춤**(이름을 바꾸면 은/는 · 이/가 · 을/를 · 과/와 · 아/야 · (으)로 · 이라고 · 이었다 …를 새 이름의 받침에 맞춤), **찾은 곳 목록**(번호 · 위치 % · 회차 · 앞뒤 글, 고르면 이동), 여러 줄 칸으로 빈 줄 개수까지 바꾸기. 같은 조건의 반복 검색 결과 재사용으로 지연을 줄임. **큰 파일의 정리 미리보기에서는 바꾸기 버튼을 누르면 먼저 동의를 받고, 승인 시 검색 조건을 유지한 채 읽기 모드로 전환해 작업을 수행**
+- 최근 파일 20개 — 몇 %까지 읽었는지 함께 표시. 옮겨지거나 지워진 파일은 회색으로 표시(목록에는 남아 있어 드라이브를 다시 연결하면 바로 열림). 켜 두면 프로그램을 켤 때 마지막 글을 읽던 곳에서 이어서 엶
 
 **읽기**
-- 글꼴 · 크기(9~28) · 굵게 · 줄 간격(좁게~아주 넓게) · 여백, 배색 8가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 …) + 사용자 지정 색
-- 클릭 · Space 쪽 넘김, 읽던 위치 기억, 목차, 파일별 책갈피, 전체 화면, Ctrl+휠 글자 크기. 일반 휠은 Windows의 스크롤 줄 수 설정을 따르면서 즉시 이동하여 고속 휠의 잔여 스크롤 문제를 개선
+- 글꼴 · 크기(9~28) · 굵게 · 문단 들여쓰기 · 줄 간격(좁게~아주 넓게) · 여백, 배색 9가지(아이보리 · 세피아 · 보호 녹색 · 저녁 앰버 · 어두운 화면 · 전자잉크 …) + 사용자 지정 색
+- 클릭 · Space · 마우스 휠 단추 · 옆 단추 쪽 넘김, 자동 넘김, 읽던 위치 기억, 목차(빠진 · 겹친 회차 번호 알림), 파일별 책갈피, 전체 화면, Ctrl+휠 글자 크기. 일반 휠은 Windows의 스크롤 줄 수 설정을 따르면서 즉시 이동하여 고속 휠의 잔여 스크롤 문제를 개선
 - 밝은 · 어두운 테마(시스템 설정 따라가기 포함), 고해상도(DPI) 화면 대응
 - 창 위치 · 크기 기억 — 다시 켜면 마지막에 놓아둔 자리에 그대로 열림 (보조 모니터 포함)
 
@@ -190,7 +194,8 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Web text cleanup** — removes page numbers, repeated headers, ads and HTML leftovers (`&nbsp;`, `<br>`), plus custom regex rules
 - **Multilingual** — the script of each paragraph is detected first, then the matching rules are applied: Chinese and Japanese sentences without spaces (`。！？`), abbreviations in English and European languages (`Mr.`, `p. m.`, `Np.`, `т.е.`), quotes such as `« »`, `„ “`, `»…«` and dash dialogue (`— Да! — сказал он.`), plus Greek `;`, Arabic `؟`, Hindi `।` and Burmese `။`; Thai line breaks are kept. Mixed-language files work, and Korean results are unaffected
 - **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, EUC-JP, GBK/GB18030, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
-- **Reading mode** — click or Space to turn pages, remembers your reading position and the window position and size, bookmarks, 8 color schemes, adjustable font, size, line spacing and margins, full-screen mode, dark theme
+- **Reading mode** — click, Space or the mouse wheel/side buttons to turn pages, timed auto page turning, remembers your reading position and the window position and size, bookmarks, a table of contents that flags missing or duplicated chapter numbers, 9 color schemes (including an e-ink style), paragraph indent, adjustable font, size, line spacing and margins, full-screen mode, dark theme
+- **Find and replace** — a hit list with position, chapter and context; a Korean particle-aware rename option (changing a name also fixes the attached particles such as 은/는 and 이/가 to match the new name); a view that highlights what the cleanup removed or changed
 - **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
 
 Native C++17 / Win32, a single ~1.5 MB exe — no installation, no runtime dependencies, no network access. Windows 7 or later (64-bit). Download from [Releases](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest).
