@@ -421,6 +421,12 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0, bool inSpeech = fa
     auto afterClose = [&](size_t i) {
         C last = i > 0 ? p[i - 1] : 0;
         bool ended = isTermChar(last);
+        // 말끝을 흐린 대사: 닫는 따옴표 바로 앞의 줄표 (「実は――」 "사실은――" “我——”)
+        // 줄표 자체는 문장 끝 글자가 아니므로 따옴표가 닫힐 때만 끝난 것으로 봄 (문장 중간 ――는 그대로)
+        // 일본어 웹소설의 가운뎃점 말줄임 (「そう・・・」): 두 개 이상일 때만 (ジョン・スミス의 ・는 아님)
+        if (!ended && encQuote && (last == 0x2015 || last == 0x2014 || last == 0x2013 || last == 0x2500 ||
+                                   ((last == 0x30FB || last == 0xFF65) && i >= 2 && (p[i - 2] == 0x30FB || p[i - 2] == 0xFF65))))
+            ended = true;
         size_t q = nextNonWS(i + 1);
         if (q >= n) return;
         if (ended && ((isOpenQuote(p[q]) && p[q] != '\'') || (p[q] == 0xBB && role[q] == 1))) { cutAt(q); return; }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.5.0).
+"""Build-time checks for the current release (v2.5.1).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,10 +23,11 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.5.0"' in main
-assert "FILEVERSION 2,5,0,0" in rc and 'VALUE "ProductVersion", "2.5.0"' in rc
-assert "야문 클린리더 v2.5.0" in manual
+assert 'kVersion = L"2.5.1"' in main
+assert "FILEVERSION 2,5,1,0" in rc and 'VALUE "ProductVersion", "2.5.1"' in rc
+assert "야문 클린리더 v2.5.1" in manual
 assert "20. v2.5.0" in manual and manual.index("19. v2.4.8") < manual.index("20. v2.5.0")
+assert "21. v2.5.1" in manual and manual.index("20. v2.5.0") < manual.index("21. v2.5.1")
 assert "17. v2.4.6" in manual and "18. v2.4.7" in manual and manual.index("17. v2.4.6") < manual.index("18. v2.4.7")
 assert "19. v2.4.8" in manual and manual.index("18. v2.4.7") < manual.index("19. v2.4.8")
 # v2.4.8: 본문 사이 목록·표 줄은 잇지 않고, 문장 끝 이모지는 앞 문장에 붙임 (정리 결과는 tests/run_cases.py가 확인)
@@ -128,6 +129,10 @@ assert "bool isPromoLine(const S& t, int sameLines)" in engine and "if (isUrlLin
 assert "if (endsLikeProse(t)) return false;" in engine and "t.size() <= 40 && sameLines >= 2" in engine   # 본문 문장·한 번만 나오는 부탁 줄은 남김
 assert engine.count("isPromoLine(") == 2                     # 정의 + 광고 옵션 안에서만 쓰임
 assert (root / "tests/cases/promo_lines_junk/options.txt").read_text().split() == ["--junk"]
+# v2.5.1: 줄표·가운뎃점 말줄임으로 끝난 대사는 닫는 따옴표에서만 끝난 것으로 봄 (문장 중간 줄표는 그대로)
+assert "if (!ended && encQuote && (last == 0x2015 || last == 0x2014 || last == 0x2013 || last == 0x2500 ||" in engine
+assert "bool isWeakTerm(C c) {\n    return c == 0x2026 || c == 0x2025 || c == '~'" in engine   # 줄표는 문장 끝 글자가 아님
+assert (root / "tests/cases/dash_end_dialogue/expected.txt").exists()
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
@@ -144,10 +149,11 @@ assert "kColorCustom = 9;" in main and "vcolor3" in main and "v3 = v2 == 8 ? kCo
 assert "case WM_XBUTTONUP:\n            return TRUE;" in main
 assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                                      # 새 버전 확인: 브라우저로 열기만
 
-# Confirm the engine is exactly the reviewed v2.5.0 blob (v2.4.8 + promo-line rule only),
+# Confirm the engine is exactly the reviewed v2.5.1 blob (v2.5.0 + speech that trails off in a
+# dash or ・・ right before its closing quote ends there: afterClose only),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "d8011d78abcdf2918df1fbcebe4e5a14809160f1", actual
+assert actual == "9bdb0e035cbc236a6773050e775a4c75c4a1024b", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -189,4 +195,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.5.0 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.5.1 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
