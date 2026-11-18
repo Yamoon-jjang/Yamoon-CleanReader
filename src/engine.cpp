@@ -2713,8 +2713,81 @@ static std::vector<size_t> styleCuts(const std::u32string& in) {
     }
     return cuts;
 }
+// 줄 가운데의 "문장 끝(또는 닫는 따옴표) + 두 칸 이상 공백(전각 공백 포함)"을 줄바꿈으로 먼저 나눔
+//   …하하……"　　"안 돼, 가지 마.   →   …하하……"
+//                                        "안 돼, 가지 마.
+// 중국 소설처럼 문단 첫머리 전각 공백 두 칸이 줄바꿈 없이 이어 붙은 글. 나중에 한 문단 안에서 나누면
+// 여러 줄 대사의 닫는 따옴표와 다음 대사의 여는 따옴표가 한 줄에 겹쳐 짝을 잘못 맞추게 됨
+// ("　　"를 빈 대사로 보아 닫는 따옴표가 다음 대사 앞에 붙음). 공백만 줄바꿈으로 바뀌고 글자는 그대로.
+// 모든 문장 뒤에 두 칸을 치는 습관인 글은 문단 구분이 아니므로 나누지 않음 (splitWideGaps와 같은 기준, 글 전체로 셈)
+static std::u32string splitWideGapLines(const std::u32string& in, std::vector<int>& perm) {
+    perm.clear();
+    size_t n = in.size();
+    auto sp = [](C c) { return c == ' ' || c == 0x3000 || c == '\t'; };
+    std::vector<std::pair<size_t, size_t>> runs;  // 나눌 공백 [a, b)
+    int wide = 0, single = 0, indent = 0;
+    size_t ls = 0;  // 줄 시작
+    for (size_t i = 0; i < n; ++i) {
+        C c = in[i];
+        if (c == '\n') { ls = i + 1; continue; }
+        if (!(isTermChar(c) || isCloseQuote(c))) continue;
+        if (i + 1 >= n || !sp(in[i + 1])) continue;
+        bool content = false;  // 이 글자 앞에 줄 내용이 있음 (줄 첫머리 들여쓰기 뒤가 아님)
+        for (size_t k = ls; k < i; ++k) if (!sp(in[k]) && !isInvisible(in[k])) { content = true; break; }
+        size_t j = i + 1; int full = 0;
+        while (j < n && sp(in[j])) { if (in[j] == 0x3000) full++; ++j; }
+        // 줄 첫머리의 닫는 따옴표 + 전각 두 칸("　　"다음 대사)은 앞 줄 대사를 닫는 것 — 따옴표만 남기고 나눔
+        // 닫는 따옴표와 다음 대사의 여는 따옴표 사이의 넓은 공백("…"  "…")도 문단 구분 (빈 대사로 잘못 짝짓지 않게)
+        bool junction = c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E) &&
+                        (j - (i + 1) >= 2 || full);
+        if (!content && !isTermChar(c) && full < 2 && !junction) continue;
+        if (j >= n || in[j] == '\n' || in[j] == '\r') continue;      // 줄 끝 공백
+        if (isTermChar(in[j])) continue;
+        if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }  // 전각 두 칸 들여쓰기가 붙은 것 / 대사 사이
+        else if (j - (i + 1) >= 2 || full) { wide++; runs.push_back({i + 1, j}); } else single++;
+    }
+    // 전각 공백 두 칸 들여쓰기는 두 번 이상이면 나눔. 그 밖의 넓은 공백은 문장 뒤 띄어쓰기 습관이 아닐 때만
+    bool wideOk = wide >= 2 && wide * 10 <= (wide + single) * 6;
+    if (!wideOk) {
+        std::vector<std::pair<size_t, size_t>> keep;
+        for (auto& rr : runs) {
+            int f = 0; for (size_t k = rr.first; k < rr.second; ++k) if (in[k] == 0x3000) f++;
+            C a0 = in[rr.first - 1], b0 = in[rr.second];
+            bool jn = a0 != '\'' && isCloseQuote(a0) && (b0 == '"' || b0 == 0x201C || b0 == 0x300C || b0 == 0x300E);
+            if (f >= 2 || jn) keep.push_back(rr);
+        }
+        runs.swap(keep);
+    }
+    if (runs.empty() || (indent < 2 && !wideOk)) return in;
+    std::u32string w;
+    w.reserve(n);
+    perm.reserve(n);
+    size_t r = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (r < runs.size() && i == runs[r].first) {
+            w += U'\n'; perm.push_back((int)i);   // 공백 자리에 줄바꿈 하나, 나머지 공백은 뺌
+            i = runs[r].second - 1; ++r;
+            continue;
+        }
+        w += in[i]; perm.push_back((int)i);
+    }
+    return w;
+}
 static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
+static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
 std::u32string TidyProcess(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+    std::vector<int> perm;
+    std::u32string w = splitWideGapLines(in, perm);
+    if (perm.empty()) return TidySplit(in, opt, rep, outMap);
+    std::vector<int> m;
+    std::u32string out = TidySplit(w, opt, rep, outMap ? &m : nullptr);
+    if (outMap) {
+        for (int& v : m) if (v >= 0 && (size_t)v < perm.size()) v = perm[v]; else if (v >= 0) v = (int)in.size();
+        outMap->swap(m);
+    }
+    return out;
+}
+static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
     std::vector<size_t> cuts;
     if (opt.blankMode == 0) cuts = styleCuts(in);
     if (cuts.empty()) return TidyWhole(in, opt, rep, outMap);

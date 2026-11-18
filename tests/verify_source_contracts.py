@@ -146,6 +146,10 @@ assert "static std::vector<size_t> styleCuts(" in engine and "if (opt.blankMode 
 assert "static const int kStyleRun = 200;" in engine and "if (!ended(big[k - 1]) || !ended(big[k])) continue;" in engine
 assert "opt.paraSep == 1 ? 1 : 2" in engine                                            # 이음매도 [문단 사이] 설정대로
 assert (root / "tests/cases/mixed_blank_styles/expected.txt").exists()
+# v2.5.3: 줄 가운데 붙은 전각 두 칸 들여쓰기·대사 사이 넓은 공백은 먼저 문단 줄바꿈으로 (따옴표 짝을 원문대로)
+assert "static std::u32string splitWideGapLines(" in engine and "std::u32string w = splitWideGapLines(in, perm);" in engine
+assert "if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }" in engine
+assert (root / "tests/cases/indent_joined_dialogue/expected.txt").exists()
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
@@ -166,7 +170,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "363731de340072891d8660600c9a0c7637cc0eb5", actual
+assert actual == "4545634e00672f4bfd99203c855dedbe5351f8ed", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
