@@ -276,19 +276,20 @@ struct Range { size_t a, len; };
 static const size_t kMaxOpenTail = 300;  // 닫히지 않은 따옴표가 이보다 길게 이어지면 따옴표로 보지 않음
 bool isBrOpen(C c) {
     return c == '(' || c == '[' || c == 0xFF08 || c == 0xFF3B || c == 0x3010 || c == 0x3014 || c == 0x300A || c == 0x3008 ||
-           c == 0x3016 || c == 0xAB || c == 0x2039 || c == 0x27E6;
+           c == 0x3016 || c == 0xAB || c == 0x2039 || c == 0x27E6 || c == 0x27EA || c == 0x3018;
 }
 C brCloseOf(C c) {
     switch (c) {
         case '(': return ')'; case '[': return ']'; case 0xFF08: return 0xFF09; case 0xFF3B: return 0xFF3D;
         case 0x3010: return 0x3011; case 0x3014: return 0x3015; case 0x300A: return 0x300B; case 0x3008: return 0x3009;
         case 0x3016: return 0x3017; case 0xAB: return 0xBB; case 0x2039: return 0x203A; case 0x27E6: return 0x27E7;
+        case 0x27EA: return 0x27EB; case 0x3018: return 0x3019;
     }
     return 0;
 }
 bool isBrClose(C c) {
     return c == ')' || c == ']' || c == 0xFF09 || c == 0xFF3D || c == 0x3011 || c == 0x3015 || c == 0x300B || c == 0x3009 ||
-           c == 0x3017 || c == 0xBB || c == 0x203A || c == 0x27E7;
+           c == 0x3017 || c == 0xBB || c == 0x203A || c == 0x27E7 || c == 0x27EB || c == 0x3019;
 }
 C qCloseOf(C c) { return c == 0x201E ? 0x201C : c == 0x201C ? 0x201D : c == 0x2018 ? 0x2019 : c == 0x300C ? 0x300D : c == 0x300E ? 0x300F : 0; }
 bool isQClose(C c) { return c == 0x201D || c == 0x2019 || c == 0x300D || c == 0x300F; }
@@ -2310,7 +2311,10 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                     // 여러 줄에 걸친 대사는 한 문단으로 합침: 짧으면 한 줄, 길면 나중에 대사 안에서 줄만 바꿈
                     Para& op = paras[openIdx];
                     for (size_t q = i; q <= k; ++q) {
-                        op.x.add(U' ', paras[q].x.first());
+                        // 중국어·일본어 대사는 띄어쓰기 없이 이음 (你来了？快进来。)
+                        C lx = lastVis(op.x.t), fy = firstVis(paras[q].x.t);
+                        bool cjk = (isKanaHan(lx) || (lx >= 0x3000 && lx <= 0x303F) || (lx >= 0xFF01 && lx <= 0xFF1F)) && isKanaHan(fy);
+                        if (!cjk) op.x.add(U' ', paras[q].x.first());
                         op.x.add(paras[q].x);
                         dead[q] = 1;
                     }
