@@ -276,19 +276,19 @@ struct Range { size_t a, len; };
 static const size_t kMaxOpenTail = 300;  // 닫히지 않은 따옴표가 이보다 길게 이어지면 따옴표로 보지 않음
 bool isBrOpen(C c) {
     return c == '(' || c == '[' || c == 0xFF08 || c == 0xFF3B || c == 0x3010 || c == 0x3014 || c == 0x300A || c == 0x3008 ||
-           c == 0x3016 || c == 0xAB || c == 0x2039;
+           c == 0x3016 || c == 0xAB || c == 0x2039 || c == 0x27E6;
 }
 C brCloseOf(C c) {
     switch (c) {
         case '(': return ')'; case '[': return ']'; case 0xFF08: return 0xFF09; case 0xFF3B: return 0xFF3D;
         case 0x3010: return 0x3011; case 0x3014: return 0x3015; case 0x300A: return 0x300B; case 0x3008: return 0x3009;
-        case 0x3016: return 0x3017; case 0xAB: return 0xBB; case 0x2039: return 0x203A;
+        case 0x3016: return 0x3017; case 0xAB: return 0xBB; case 0x2039: return 0x203A; case 0x27E6: return 0x27E7;
     }
     return 0;
 }
 bool isBrClose(C c) {
     return c == ')' || c == ']' || c == 0xFF09 || c == 0xFF3D || c == 0x3011 || c == 0x3015 || c == 0x300B || c == 0x3009 ||
-           c == 0x3017 || c == 0xBB || c == 0x203A;
+           c == 0x3017 || c == 0xBB || c == 0x203A || c == 0x27E7;
 }
 C qCloseOf(C c) { return c == 0x201E ? 0x201C : c == 0x201C ? 0x201D : c == 0x2018 ? 0x2019 : c == 0x300C ? 0x300D : c == 0x300E ? 0x300F : 0; }
 bool isQClose(C c) { return c == 0x201D || c == 0x2019 || c == 0x300D || c == 0x300F; }
@@ -2267,9 +2267,17 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     // 여러 줄에 걸친 대사: 앞 문단 끝에서 열린 따옴표가 이 문단에서 닫히면 이어진 대사로 봄
     {
         // 따옴표 수 세기: 곧은 따옴표 수, 여는 둥근 따옴표 수, 닫는 둥근 따옴표 수
+        // 둥근·낫표 따옴표는 문단 안에서 짝이 맞는 것(대사 속 인용 ‘침대 시중 도구’ 등)은 세지 않음 —
+        // 여러 줄 대사 중간 줄에 짧은 인용이 있어도 대사가 이어지게
         auto qcount = [](const S& v, int& dq, int& qo, int& qc) {
             dq = qo = qc = 0;
-            for (C c : v) { if (c == '"') dq++; else if (qCloseOf(c)) qo++; else if (isQClose(c)) qc++; }
+            std::vector<C> st;
+            for (C c : v) {
+                if (c == '"') dq++;
+                else if (qCloseOf(c)) st.push_back(qCloseOf(c));
+                else if (isQClose(c)) { if (!st.empty() && st.back() == c) st.pop_back(); else qc++; }
+            }
+            qo = (int)st.size();
         };
         std::vector<S> vis(paras.size());
         for (size_t i = 0; i < paras.size(); ++i) if (paras[i].kind == 0) vis[i] = visText(paras[i].x.t);
@@ -2778,11 +2786,11 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
         //   …주마!""오랜만에…     (띄어쓰기 없이 붙은 것도)
         //   " "연아, …           (줄 첫머리의 닫는 따옴표 + 공백 + 다음 대사)
         // 그대로 두면 "　　" / " " 를 빈 대사로 짝지어 닫는 따옴표가 다음 대사 앞에 붙음(""안 돼)
-        if (c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E)) {
+        if (c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E || in[j] == 0x2018)) {
             bool firstQ = true;
             for (size_t k = ls; k < i; ++k) {
                 C q = in[k];
-                if (q == '"' || q == 0x201C || q == 0x201D || q == 0x300C || q == 0x300D || q == 0x300E || q == 0x300F) { firstQ = false; break; }
+                if (q == '"' || q == 0x201C || q == 0x201D || q == 0x300C || q == 0x300D || q == 0x300E || q == 0x300F || q == 0x2018 || q == 0x2019) { firstQ = false; break; }
             }
             bool j0 = full >= 1 && j - (i + 1) >= 2;
             bool j1 = content && firstQ && i > ls && !sp(in[i - 1]) && !isInvisible(in[i - 1]);
@@ -2860,7 +2868,7 @@ static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt
 static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
 // 짝 잃은 따옴표 하나만 남은 줄(원문의 뒤집힌 「」·짝 안 맞는 따옴표에서 생김)은 앞 줄 끝에 붙임 — 원문에서도 그 자리
 static void glueLoneQuotes(std::u32string& out, std::vector<int>* map) {
-    auto isQ = [](C c) { return c == '"' || c == 0x201C || c == 0x201D || c == 0x300C || c == 0x300D || c == 0x300E || c == 0x300F; };
+    auto isQ = [](C c) { return c == '"' || c == 0x201C || c == 0x201D || c == 0x300C || c == 0x300D || c == 0x300E || c == 0x300F || c == 0x2018 || c == 0x2019; };
     std::vector<char> del(out.size(), 0);
     bool any = false;
     size_t a = 0, n = out.size();
@@ -2883,22 +2891,117 @@ static void glueLoneQuotes(std::u32string& out, std::vector<int>* map) {
     out.swap(w);
     if (map) map->swap(m);
 }
-std::u32string TidyProcess(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+// 여러 모양의 따옴표를 정리하는 동안만 엔진이 아는 모양으로 바꿔 둠 (결과에서는 [따옴표: 그대로]면 원래 모양으로 되돌림)
+//   전각 ＂ → "        〝 → “   〞 〟 → ”
+//   곧은 작은따옴표 ' 와 전각 ＇ (한글이 있는 줄에서, 짝이 맞는 것만) → ‘ ’
+//     — 생각·혼잣말('정말 그럴까? / 아니야.')이 여러 줄에 걸쳐도 큰따옴표 대사처럼 한 덩어리로.
+//       영문 줄임표(It's)·숫자 앞('90년대)처럼 짝이 없는 것은 그대로 둠
+static std::u32string normalizeQuotes(const std::u32string& in, std::vector<std::pair<size_t, C>>& conv) {
+    conv.clear();
+    std::u32string w = in;
+    size_t n = in.size();
+    for (size_t i = 0; i < n; ++i) {
+        C c = in[i], r = 0;
+        if (c == 0xFF02) r = '"';
+        else if (c == 0x301D) r = 0x201C;
+        else if (c == 0x301E || c == 0x301F) r = 0x201D;
+        if (r) { conv.push_back({i, c}); w[i] = r; }
+    }
+    // 작은따옴표: 자리로 여는 것/닫는 것을 가리고, 가까이(1,500자 안)에서 짝이 맞을 때만 바꿈
+    auto sp = [](C c) { return c == 0 || isWS(c) || c == '\n' || c == '\r'; };
+    auto openCtx = [](C c) { return c == '(' || c == '[' || c == 0x201C || c == '"' || c == 0x300C || c == 0x300E || c == 0x2014 || c == 0x2015; };
+    size_t pend = SIZE_MAX, ls = 0;
+    bool hg = false;
+    auto lineHangul = [&](size_t a) {  // 한글이 있는 줄 (글자 없이 문장부호·따옴표만 있는 줄은 앞 줄에 딸린 것으로 봄)
+        bool letter = false;
+        for (size_t k = a; k < n && in[k] != '\n'; ++k) { if (isHangul(in[k])) return true; if (isAsciiAlpha(in[k]) || isKanaHan(in[k]) || isDigit(in[k])) letter = true; }
+        return !letter;
+    };
+    hg = lineHangul(0);
+    for (size_t i = 0; i < n; ++i) {
+        C c = in[i];
+        if (c == '\n') { ls = i + 1; hg = lineHangul(ls); continue; }
+        if (c != '\'' && c != 0xFF07) continue;
+        if (!hg) { pend = SIZE_MAX; continue; }
+        C pc = i > ls ? in[i - 1] : 0, nc = i + 1 < n ? in[i + 1] : 0;
+        if (isAsciiAlpha(pc) && isAsciiAlpha(nc)) continue;            // It's
+        bool canOpen = (sp(pc) || openCtx(pc) || i == ls) && !sp(nc);
+        bool canClose = !sp(pc) && !openCtx(pc) && (sp(nc) || isTermChar(nc) || isCloseQuote(nc) || nc == ',' || nc == ')' ||
+                        isTermChar(pc) || isHangulSyl(nc));
+        if (i == ls && (nc == 0 || nc == '\n' || nc == '\r')) { canOpen = false; canClose = true; }  // 홀로 한 줄을 차지한 ' (생각을 닫는 것)
+        if (pend != SIZE_MAX && canClose && i - pend <= 1500) {
+            conv.push_back({pend, in[pend]}); w[pend] = 0x2018;
+            conv.push_back({i, c}); w[i] = 0x2019;
+            pend = SIZE_MAX;
+        } else if (canOpen) pend = i;
+        else if (canClose) pend = SIZE_MAX;
+    }
+    // 따옴표 대신 쓰는 기호 (한글 줄에서, 가까이 짝이 맞을 때만):
+    //   ┌ └ … ┐ ┘ → 「 」     « » → “ ”     ‹ › → ‘ ’     ` … ´ (또는 ') → ‘ ’
+    // 선 긋기(─ │ 등)가 든 줄(표·상자 그림)은 건드리지 않음
+    struct Kind { C o1, o2, c1, c2, c3; C to, tc; };
+    static const Kind kinds[] = {
+        {0x250C, 0x2514, 0x2510, 0x2518, 0, 0x300C, 0x300D},
+        {0x00AB, 0, 0x00BB, 0, 0, 0x201C, 0x201D},
+        {0x2039, 0, 0x203A, 0, 0, 0x2018, 0x2019},
+        {0x0060, 0, 0x00B4, '\'', 0x2019, 0x2018, 0x2019},
+    };
+    auto boxLine = [&](size_t a) {
+        for (size_t k = a; k < n && in[k] != '\n'; ++k) { C c = in[k]; if (c == 0x2500 || c == 0x2502 || c == 0x251C || c == 0x2524 || c == 0x252C || c == 0x2534 || c == 0x253C || c == 0x2501 || c == 0x2503) return true; }
+        return false;
+    };
+    for (const Kind& kd : kinds) {
+        bool any = false;
+        for (size_t i = 0; i < n && !any; ++i) if (in[i] == kd.o1 || (kd.o2 && in[i] == kd.o2)) any = true;
+        if (!any) continue;
+        size_t pend2 = SIZE_MAX, ls2 = 0;
+        bool ok = lineHangul(0) && !boxLine(0);
+        for (size_t i = 0; i < n; ++i) {
+            C c = in[i];
+            if (c == '\n') { ls2 = i + 1; ok = lineHangul(ls2) && !boxLine(ls2); continue; }
+            if (!ok) { if (c == kd.o1 || c == kd.c1) pend2 = SIZE_MAX; continue; }
+            bool isO = c == kd.o1 || (kd.o2 && c == kd.o2);
+            bool isC = c == kd.c1 || (kd.c2 && c == kd.c2) || (kd.c3 && c == kd.c3);
+            if (!isO && !isC) continue;
+            if (isC && pend2 != SIZE_MAX && i - pend2 <= 1500 && w[i] == c) {
+                conv.push_back({pend2, in[pend2]}); w[pend2] = kd.to;
+                conv.push_back({i, in[i]}); w[i] = kd.tc;
+                pend2 = SIZE_MAX;
+            } else if (isO) pend2 = i;
+        }
+    }
+    std::sort(conv.begin(), conv.end());
+    conv.erase(std::unique(conv.begin(), conv.end(), [](const std::pair<size_t, C>& a, const std::pair<size_t, C>& b) { return a.first == b.first; }), conv.end());
+    return w;
+}
+std::u32string TidyProcess(const std::u32string& in0, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+    std::vector<std::pair<size_t, C>> conv;
+    std::u32string inq = normalizeQuotes(in0, conv);
+    const std::u32string& in = conv.empty() ? in0 : inq;
+    bool needMap = outMap || (!conv.empty() && opt.quoteMode == 0);
     std::vector<int> perm;
     std::u32string w = splitWideGapLines(in, perm);
     std::vector<int> m;
     std::u32string out;
-    if (perm.empty()) out = TidySplit(in, opt, rep, outMap ? &m : nullptr);
+    if (perm.empty()) out = TidySplit(in, opt, rep, needMap ? &m : nullptr);
     else {
-        out = TidySplit(w, opt, rep, outMap ? &m : nullptr);
-        if (outMap) {
+        out = TidySplit(w, opt, rep, needMap ? &m : nullptr);
+        if (needMap) {
             for (int& v : m) {
                 if (v >= 0 && (size_t)v < perm.size()) v = perm[v];
                 else if (v >= 0) v = (int)in.size();
             }
         }
     }
-    glueLoneQuotes(out, outMap ? &m : nullptr);
+    glueLoneQuotes(out, needMap ? &m : nullptr);
+    if (!conv.empty() && opt.quoteMode == 0) {  // "그대로": 바꿔 본 따옴표를 원래 모양으로
+        for (size_t k = 0; k < out.size() && k < m.size(); ++k) {
+            C c = out[k];
+            if (m[k] < 0 || !(c == '"' || c == 0x201C || c == 0x201D || c == 0x2018 || c == 0x2019 || c == 0x300C || c == 0x300D)) continue;
+            auto it = std::lower_bound(conv.begin(), conv.end(), std::make_pair((size_t)m[k], (C)0));
+            if (it != conv.end() && it->first == (size_t)m[k]) out[k] = it->second;
+        }
+    }
     if (outMap) outMap->swap(m);
     return out;
 }

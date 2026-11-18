@@ -164,6 +164,10 @@ assert "static bool IsOwnOutput(const wstring& f, const std::vector<wstring>& al
 assert "(IsOwnOutput(f, all) ? own : files).push_back(f);" in main
 assert "int sceneMin = base == 0 ? 2 : base + 1;" in engine and "q.noScene || q.soft || q.fromBlock" in engine   # 빈 줄 하나는 장면 전환 아님(빈 줄 없는 글)
 assert (root / "tests/cases/single_blank_not_scene/expected.txt").exists()
+assert "static std::u32string normalizeQuotes(" in engine and "std::u32string inq = normalizeQuotes(in0, conv);" in engine  # 작은따옴표·전각·기호 따옴표
+assert "{0x250C, 0x2514, 0x2510, 0x2518, 0, 0x300C, 0x300D}" in engine and "case 0x27E6: return 0x27E7;" in engine
+assert "if (!st.empty() && st.back() == c) st.pop_back(); else qc++;" in engine                       # 대사 속 짝 맞는 인용은 셈하지 않음
+assert (root / "tests/cases/quote_variants/expected.txt").exists()
 assert "static void BusyShow(bool on)" in main and "BusyShow(true);" in body("static void StartJob()")
 assert "BusyShow(false);" in body("static void OnProcDone(ProcJob* j)") and "g_progDone.fetch_add(1);" in main
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
@@ -186,7 +190,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "b8f0f7a1bb520f0c85610d959648e586bf4ad0a1", actual
+assert actual == "163a98292686a6ec8b25b55e24fadb8bbd3dc722", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
