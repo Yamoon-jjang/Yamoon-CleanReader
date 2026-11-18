@@ -5,6 +5,7 @@
 #include <regex>
 #include <map>
 #include <algorithm>
+#include <climits>
 #include <cstring>
 
 namespace {
@@ -2654,7 +2655,10 @@ static std::vector<size_t> styleCuts(const std::u32string& in) {
     }
     int m = (int)ls.size();
     if (m < 2 * kStyleRun) return cuts;
-    // 각 줄 둘레(앞뒤 kStyleWin/2줄)에서 빈 줄이 앞에 있는 줄의 비율로 방식 판정: 1 줄마다 빈 줄, 0 빈 줄 없음, -1 애매
+    // 각 줄 둘레(앞뒤 kStyleWin/2줄)에서 빈 줄이 앞에 있는 줄의 비율로 방식 판정:
+    //   1 빈 줄을 쓰는 글(줄마다 빈 줄, 또는 빈 줄로 문단을 나눈 글: 15% 이상), 0 빈 줄 없음(2% 이하), -1 애매
+    // 빈 줄로 문단을 나눈 글이 섞이면 글 전체가 "문단 안 줄바꿈은 줄바꿈만"으로 판단되어,
+    // 빈 줄 없이 한 줄 = 한 문단인 부분의 문단 사이에 빈 줄이 들어가지 않으므로 이 경우도 나눔
     std::vector<int> pre(m + 1, 0);
     for (int i = 0; i < m; ++i) pre[i + 1] = pre[i] + (ls[i].gap >= 1 ? 1 : 0);
     std::vector<int> st(m, -1);
@@ -2662,7 +2666,7 @@ static std::vector<size_t> styleCuts(const std::u32string& in) {
         int lo = std::max(1, i - kStyleWin / 2), hi = std::min(m, i + kStyleWin / 2);
         int cnt = hi - lo; if (cnt < 10) continue;
         int bl = pre[hi] - pre[lo];
-        if (bl * 10 >= cnt * 9) st[i] = 1;
+        if (bl * 100 >= cnt * 15) st[i] = 1;
         else if (bl * 50 <= cnt) st[i] = 0;
     }
     // 같은 방식이 이어지는 구간 (애매한 줄은 건너뜀)
@@ -2686,24 +2690,27 @@ static std::vector<size_t> styleCuts(const std::u32string& in) {
         for (int i = r.s; i <= r.e; ++i) c += ls[i].endS;
         return c * 10 >= (r.e - r.s + 1) * 6;
     };
+    // 빈 줄 없는 쪽은 구간 전체에 빈 줄이 거의 없어야 함(200줄에 1개 이하) — 긴 문단이 몇 개 이어진 것뿐인
+    // "빈 줄로 문단을 나눈 글"을 잘못 나누지 않게
+    auto plain = [&](const Run& r) { return r.k != 0 || (pre[r.e + 1] - pre[r.s + 1]) * 200 <= (r.e - r.s + 1); };
     for (size_t k = 1; k < big.size(); ++k) {
-        if (!ended(big[k - 1]) || !ended(big[k])) continue;
-        // 이 사이(앞뒤 창 너비만큼 넓혀)에서 방식이 바뀜: 앞은 앞 방식, 뒤는 뒤 방식에 가장 잘 맞는 자리
+        if (!ended(big[k - 1]) || !ended(big[k]) || !plain(big[k - 1]) || !plain(big[k])) continue;
+        // 이 사이(앞뒤 창 너비만큼 넓혀)에서 방식이 바뀜. 자르는 곳은 빈 줄 다음 줄(문단 경계)로,
+        // 빈 줄 없는 쪽에는 빈 줄이 가장 적고 빈 줄 쓰는 쪽에는 가장 많은 자리
         int s = std::max(big[k - 1].s + 1, big[k - 1].e + 1 - kStyleWin), e = std::min(big[k].e, big[k].s + kStyleWin);
-        int kb = big[k - 1].k, c = -1, bestScore = -1;
-        {
-            // score(c) = [s, c) 중 앞 방식에 맞는 줄 + [c, e] 중 뒤 방식에 맞는 줄
-            auto fit = [&](int i, int kind) { return kind == 1 ? ls[i].gap >= 1 : ls[i].gap == 0; };
-            int left = 0, right = 0;
-            for (int i = s; i <= e; ++i) right += fit(i, 1 - kb);
-            for (int x = s; x <= e; ++x) {
-                int sc = left + right;
-                if (sc > bestScore) { bestScore = sc; c = x; }
-                left += fit(x, kb); right -= fit(x, 1 - kb);
-            }
+        int kb = big[k - 1].k, c = -1;
+        long bestScore = LONG_MIN;
+        auto blanks = [&](int lo, int hi) { lo = std::max(lo, 0); hi = std::min(hi, m); return lo < hi ? pre[hi] - pre[lo] : 0; };
+        for (int x = s; x <= e && x < m; ++x) {
+            if (ls[x].gap < 1) continue;
+            int before = blanks(x - kStyleWin, x), after = blanks(x + 1, x + 1 + kStyleWin);
+            long sc = kb == 0 ? (long)after - 3L * before : (long)before - 3L * after;
+            if (sc > bestScore) { bestScore = sc; c = x; }
         }
-        if (c < 1) c = (s + e) / 2;
-        int best = -1;
+        if (c < 1) {  // 빈 줄이 없으면(드묾) 두 방식이 가장 잘 갈리는 자리
+            c = (s + e) / 2;
+        }
+        int best = ls[c].gap >= 1 ? c : -1;
         for (int d = 0; d <= 5 && best < 0; ++d) {
             if (c - d >= 1 && ls[c - d - 1].endS) best = c - d;
             else if (c + d < m && c + d >= 1 && ls[c + d - 1].endS) best = c + d;
@@ -2725,7 +2732,7 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
     size_t n = in.size();
     auto sp = [](C c) { return c == ' ' || c == 0x3000 || c == '\t'; };
     std::vector<std::pair<size_t, size_t>> runs;  // 나눌 공백 [a, b)
-    int wide = 0, single = 0, indent = 0;
+    int indent = 0;
     size_t ls = 0;  // 줄 시작
     for (size_t i = 0; i < n; ++i) {
         C c = in[i];
@@ -2737,28 +2744,19 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
         size_t j = i + 1; int full = 0;
         while (j < n && sp(in[j])) { if (in[j] == 0x3000) full++; ++j; }
         // 줄 첫머리의 닫는 따옴표 + 전각 두 칸("　　"다음 대사)은 앞 줄 대사를 닫는 것 — 따옴표만 남기고 나눔
-        // 닫는 따옴표와 다음 대사의 여는 따옴표 사이의 넓은 공백("…"  "…")도 문단 구분 (빈 대사로 잘못 짝짓지 않게)
-        bool junction = c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E) &&
-                        (j - (i + 1) >= 2 || full);
+        // 닫는 따옴표와 다음 대사의 여는 따옴표 사이의 전각 공백 섞인 넓은 공백("…"　 "…")도 문단 구분 (빈 대사로 잘못 짝짓지 않게)
+        bool cjkLine = false;  // 한글·한자·가나가 있는 줄만 (영문 소설의 문장 뒤 두 칸 띄어쓰기는 건드리지 않음)
+        for (size_t k = ls; k < n && in[k] != '\n'; ++k) if (isHangul(in[k]) || isKanaHan(in[k])) { cjkLine = true; break; }
+        bool junction = cjkLine && c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E) &&
+                        full >= 1 && j - (i + 1) >= 2;  // 전각 공백이 든 넓은 공백만 (반각 두 칸은 띄어쓰기 습관일 수 있음)
         if (!content && !isTermChar(c) && full < 2 && !junction) continue;
         if (j >= n || in[j] == '\n' || in[j] == '\r') continue;      // 줄 끝 공백
         if (isTermChar(in[j])) continue;
         if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }  // 전각 두 칸 들여쓰기가 붙은 것 / 대사 사이
-        else if (j - (i + 1) >= 2 || full) { wide++; runs.push_back({i + 1, j}); } else single++;
+        // 그 밖의 넓은 공백은 여기서 나누지 않음: 고정폭으로 끊긴 글을 이어 붙인 뒤 splitWideGaps가 문단 안에서 판단
     }
-    // 전각 공백 두 칸 들여쓰기는 두 번 이상이면 나눔. 그 밖의 넓은 공백은 문장 뒤 띄어쓰기 습관이 아닐 때만
-    bool wideOk = wide >= 2 && wide * 10 <= (wide + single) * 6;
-    if (!wideOk) {
-        std::vector<std::pair<size_t, size_t>> keep;
-        for (auto& rr : runs) {
-            int f = 0; for (size_t k = rr.first; k < rr.second; ++k) if (in[k] == 0x3000) f++;
-            C a0 = in[rr.first - 1], b0 = in[rr.second];
-            bool jn = a0 != '\'' && isCloseQuote(a0) && (b0 == '"' || b0 == 0x201C || b0 == 0x300C || b0 == 0x300E);
-            if (f >= 2 || jn) keep.push_back(rr);
-        }
-        runs.swap(keep);
-    }
-    if (runs.empty() || (indent < 2 && !wideOk)) return in;
+    // 나눌 곳이 없으면 그대로
+    if (indent < 1) return in;
     std::u32string w;
     w.reserve(n);
     perm.reserve(n);

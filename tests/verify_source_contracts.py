@@ -143,13 +143,16 @@ assert (root / "tests/cases/shifted_close_quote/expected.txt").exists()
 assert (root / "tests/cases/stray_quote_glued_dialogue/expected.txt").exists()        # 짝 없는 따옴표가 섞인 보통 글은 그대로
 # v2.5.3: 한 파일 안에서 빈 줄 형식이 크게 바뀌면 그곳에서 나눠 따로 판단 (설정은 전체에 똑같이)
 assert "static std::vector<size_t> styleCuts(" in engine and "if (opt.blankMode == 0) cuts = styleCuts(in);" in engine
-assert "static const int kStyleRun = 200;" in engine and "if (!ended(big[k - 1]) || !ended(big[k])) continue;" in engine
+assert "static const int kStyleRun = 200;" in engine and "if (!ended(big[k - 1]) || !ended(big[k]) || !plain(big[k - 1]) || !plain(big[k])) continue;" in engine
 assert "opt.paraSep == 1 ? 1 : 2" in engine                                            # 이음매도 [문단 사이] 설정대로
 assert (root / "tests/cases/mixed_blank_styles/expected.txt").exists()
 # v2.5.3: 줄 가운데 붙은 전각 두 칸 들여쓰기·대사 사이 넓은 공백은 먼저 문단 줄바꿈으로 (따옴표 짝을 원문대로)
 assert "static std::u32string splitWideGapLines(" in engine and "std::u32string w = splitWideGapLines(in, perm);" in engine
 assert "if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }" in engine
 assert (root / "tests/cases/indent_joined_dialogue/expected.txt").exists()
+assert "full >= 1 && j - (i + 1) >= 2;" in engine and "if (indent < 1) return in;" in engine           # 반각 두 칸·영문은 나누지 않음
+assert "if (bl * 100 >= cnt * 15) st[i] = 1;" in engine                                                # 빈 줄로 문단을 나눈 글과 섞여도 나눔
+assert (root / "tests/cases/plain_then_block_paragraphs/expected.txt").exists()
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
@@ -170,7 +173,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "4545634e00672f4bfd99203c855dedbe5351f8ed", actual
+assert actual == "d547c07c40af2cf394d14bdae6a89a703bc54607", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
