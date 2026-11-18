@@ -2140,7 +2140,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         }
     }
     // 6) 문단 만들기
-    struct Para { TM x; int kind; int gap = 0; bool scene = false; bool noScene = false; bool cont = false; bool soft = false; int startQ = 0; bool fromLong = false; bool inQuote = false; bool speechCont = false; bool speechEnd = false; };  // speechCont/End: 긴 대사를 나눈 둘째 줄부터 / 마지막 줄  // inQuote: 문단 전체가 대사 속(닫는 따옴표는 뒤 문단에)  // fromLong: 원래 400자가 넘던 문단(한 줄 글 등)에서 나온 조각  // soft: 빈 줄로 문단을 나눈 글의 문단 안 줄바꿈  // cont: 앞 조각과 같은 원문 문단(문장마다 나눈 것)  // kind: 0 본문, 1 제목, 2 구분선
+    struct Para { TM x; int kind; int gap = 0; bool scene = false; bool noScene = false; bool cont = false; bool soft = false; int startQ = 0; bool fromLong = false; bool inQuote = false; bool speechCont = false; bool speechEnd = false; bool fromBlock = false; };  // fromBlock: 빈 줄 없이 길게 이어진 문장 줄 덩어리에서 문단으로 뗀 줄 (원문 간격 0 — 장면 전환 판정에서 뺌)  // speechCont/End: 긴 대사를 나눈 둘째 줄부터 / 마지막 줄  // inQuote: 문단 전체가 대사 속(닫는 따옴표는 뒤 문단에)  // fromLong: 원래 400자가 넘던 문단(한 줄 글 등)에서 나온 조각  // soft: 빈 줄로 문단을 나눈 글의 문단 안 줄바꿈  // cont: 앞 조각과 같은 원문 문단(문장마다 나눈 것)  // kind: 0 본문, 1 제목, 2 구분선
     auto lineTM = [&](const Line& L) { TM r; r.t = L.t; r.m = L.m; return r; };
     std::vector<Para> paras;
     {
@@ -2157,6 +2157,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 paras.push_back(std::move(cur));
                 cur = Para{lineTM(lines[i]), lines[i].sym ? 2 : lines[i].head ? 1 : 0, lines[i].gap};
                 cur.soft = (listLike || (blockStyle && !longBlock[i])) && lines[i].gap == 0;
+                cur.fromBlock = blockStyle && longBlock[i] && lines[i].gap == 0;
                 cur.noScene = lines[i].afterJunk;
                 parts = 1;
             }
@@ -2171,21 +2172,26 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     if (paras.size() >= 4) {
         int hist[4] = {0, 0, 0, 0};
         int total = 0;
-        for (size_t i = 1; i < paras.size(); ++i) if (!paras[i].noScene && !paras[i].soft) { hist[std::min(paras[i].gap, 3)]++; total++; }
+        // 원문 간격이 아닌 곳(문단 안 줄바꿈, 긴 덩어리에서 뗀 줄)은 세지 않음 — 원래 빈 줄 하나인 곳이 "넓은 간격"으로 보이지 않게
+        auto gapLess = [](const Para& q) { return q.noScene || q.soft || q.fromBlock; };
+        for (size_t i = 1; i < paras.size(); ++i) if (!gapLess(paras[i])) { hist[std::min(paras[i].gap, 3)]++; total++; }
         int base = 0;
         for (int g = 1; g < 4; ++g) if (hist[g] > hist[base]) base = g;
+        // 빈 줄 없이 쓴 글(평소 간격 0)에 군데군데 있는 빈 줄 하나는 장면 전환으로 보지 않음:
+        // 결과에서도 문단 사이 빈 줄 하나 그대로 (빈 줄 두 개 이상만 장면 전환). v2.5.3
+        int sceneMin = base == 0 ? 2 : base + 1;
         int wider = 0;
-        for (size_t i = 1; i < paras.size(); ++i) if (!paras[i].noScene && !paras[i].soft && std::min(paras[i].gap, 3) > base) wider++;
+        for (size_t i = 1; i < paras.size(); ++i) if (!gapLess(paras[i]) && std::min(paras[i].gap, 3) >= sceneMin) wider++;
         if (wider > 0) {
             // 의도된 장면 전환: 넓은 간격이 드물고(1/3 이하), 넓은 간격의 크기가 한 가지로 일정하며,
             // 평소보다 좁은 간격도 거의 없을 때. 간격이 여러 크기로 뒤섞이면 제각각인 글로 보고 통일함
             int widerKinds = 0, narrower = 0;
-            for (int g = base + 1; g < 4; ++g) if (hist[g]) widerKinds++;
+            for (int g = sceneMin; g < 4; ++g) if (hist[g]) widerKinds++;
             for (int g = 0; g < base; ++g) narrower += hist[g];
             bool intentional = wider * 3 <= total && widerKinds == 1 && narrower * 10 <= total;
             if (intentional) {
                 for (size_t i = 1; i < paras.size(); ++i) {
-                    if (paras[i].noScene || paras[i].soft || std::min(paras[i].gap, 3) <= base) continue;
+                    if (gapLess(paras[i]) || std::min(paras[i].gap, 3) < sceneMin) continue;
                     // 이미 구분선(* * *)이나 제목이 있는 곳은 따로 표시하지 않음
                     if (paras[i].kind != 0 || paras[i - 1].kind != 0) continue;
                     paras[i].scene = true;

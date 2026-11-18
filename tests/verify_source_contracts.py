@@ -162,6 +162,8 @@ assert (root / "tests/cases/long_block_sentence_lines/expected.txt").exists()
 # v2.5.3: 합치기 목록에서 앞서 만든 결과 파일 빼기 · 큰 글 정리 중 결과 칸 안내
 assert "static bool IsOwnOutput(const wstring& f, const std::vector<wstring>& all)" in main
 assert "(IsOwnOutput(f, all) ? own : files).push_back(f);" in main
+assert "int sceneMin = base == 0 ? 2 : base + 1;" in engine and "q.noScene || q.soft || q.fromBlock" in engine   # 빈 줄 하나는 장면 전환 아님(빈 줄 없는 글)
+assert (root / "tests/cases/single_blank_not_scene/expected.txt").exists()
 assert "static void BusyShow(bool on)" in main and "BusyShow(true);" in body("static void StartJob()")
 assert "BusyShow(false);" in body("static void OnProcDone(ProcJob* j)") and "g_progDone.fetch_add(1);" in main
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
@@ -184,7 +186,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "6ebc13cf4bd81ca241f074b5a86da022cd55a041", actual
+assert actual == "b8f0f7a1bb520f0c85610d959648e586bf4ad0a1", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
