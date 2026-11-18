@@ -2498,10 +2498,145 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
     return out.t;
 }
 
+// 대사를 닫는 곧은 따옴표가 다음 줄 첫머리로 밀려난 글 바로잡기
+//   넌 죽었어...            →   넌 죽었어..."
+//   "고소림의 포효에 …           고소림의 포효에 …
+//   ""안 돼, 가지 마.        →   (앞 대사 끝에 ") "안 돼, 가지 마.
+// 이런 글은 대사 안 문장이 한 줄씩 떨어진 채 남는다. 줄 첫머리 따옴표를 앞 줄 끝으로 옮기기만 하므로
+// (사이의 줄바꿈·공백만 자리가 바뀜) 공백을 뺀 글자 차례는 원문과 같다.
+// - 대상: 한글이 있는 줄. 따옴표 차례로 보아 대사가 열린 채로 줄이 따옴표로 시작하는 경우(밀려난 닫는 따옴표 후보)
+// - 그 줄의 나머지 따옴표가 "앞 대사는 이미 닫혔다"고 볼 때 자연스러워야 함(여는 것은 글자 앞, 닫는 것은 글자 뒤)
+// - 이렇게 볼 때만 설명되는 줄(""대사, "서술…말했다."대사)이 가까이에 둘 이상 있어야 함
+//   (영문식으로 여러 문단 대사를 다시 " 로 여는 글, 짝이 하나 어긋난 보통 글은 건드리지 않음)
+static const size_t kShiftWin = 400;  // 증거를 찾는 범위 (줄 수, 앞뒤)
+static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int>& perm) {
+    perm.clear();
+    size_t n = in.size();
+    if (in.find('"') == std::u32string::npos) return in;
+    auto blank = [](C c) { return isWS(c) || c == '\r' || c == '\n'; };
+    struct Cand { size_t line, q; bool plausible, strong; };
+    std::vector<Cand> cands;
+    // 따옴표 안에 든 말이 서술("~물었다." "~있었다.")로 끝나는가: 짝이 하나 어긋난 글은 대사와 서술이 뒤바뀌어 보임
+    std::vector<std::pair<size_t, char>> spans;  // (닫힌 줄, 서술로 끝남)
+    size_t openAt = 0;
+    auto narrEnd = [&](size_t a0, size_t close) {
+        size_t k = close; bool dot = false;
+        while (k > a0 && (blank(in[k - 1]) || isInvisible(in[k - 1]))) --k;
+        while (k > a0 && (in[k - 1] == '.' || in[k - 1] == '!' || in[k - 1] == 0x2026 || in[k - 1] == '~')) { if (in[k - 1] == '.') dot = true; --k; }
+        if (!dot || k < a0 + 2 || in[k - 1] != U'다') return false;
+        C s2 = in[k - 2];
+        return isHangulSyl(s2) && (s2 - 0xAC00) % 28 == 20;  // 받침 ㅆ: 었다·았다·였다·했다
+    };
+    auto closeSpan = [&](size_t i, size_t line) { spans.push_back({line, (char)narrEnd(openAt, i)}); };
+    std::vector<size_t> lineStart;  // 줄 시작 위치
+    bool open = false;
+    size_t ln = 0, a = 0;
+    while (a <= n) {
+        size_t b = in.find('\n', a);
+        if (b == std::u32string::npos) b = n;
+        lineStart.push_back(a);
+        size_t fv = a;
+        while (fv < b && (blank(in[fv]) || isInvisible(in[fv]))) ++fv;
+        bool hg = false;
+        for (size_t i = fv; i < b; ++i) if (isHangul(in[i])) { hg = true; break; }
+        // 둥근 따옴표가 섞인 줄("대사…”)은 곧은 따옴표가 둥근 것과 짝인 경우라 후보에서 뺌
+        if (hg) for (size_t i = fv; i < b; ++i) if (in[i] == 0x201C || in[i] == 0x201D) { hg = false; break; }
+        int ci = -1;          // 이 줄이 후보면 cands 번호
+        int rest = 0;         // 후보 줄의 나머지 따옴표 수
+        bool bad = false;     // 후보 줄의 나머지가 어색함
+        for (size_t i = fv; i < b; ++i) {
+            if (in[i] != '"') continue;
+            if (i == fv) {
+                // 열린 대사가 서술("~했다.")로 끝난다면 짝이 어긋난 것: 이 따옴표는 새로 여는 것으로 보고 다시 맞춤
+                if (open && hg && narrEnd(openAt, i)) { openAt = i + 1; }
+                else if (open && hg) { ci = (int)cands.size(); cands.push_back({ln, i, false, false}); open = false; closeSpan(i, ln); }
+                else if (open) { open = false; closeSpan(i, ln); }
+                else { open = true; openAt = i + 1; }
+                continue;
+            }
+            size_t p = i; while (p > fv && isInvisible(in[p - 1])) --p;
+            C pc = p > fv ? in[p - 1] : 0;
+            size_t q = i + 1; while (q < b && isInvisible(in[q])) ++q;
+            C nc = q < b ? in[q] : 0;
+            bool prevSp = pc == 0 || blank(pc), nextSp = nc == 0 || blank(nc);
+            if (ci >= 0) rest++;
+            bool cl;
+            if (!prevSp && nextSp) { if (!open && ci >= 0) bad = true; cl = true; }        // 닫는 자리
+            else if (prevSp && !nextSp) { if (open && ci >= 0) bad = true; cl = false; }   // 여는 자리
+            else cl = open;
+            if (cl) { if (open) closeSpan(i, ln); open = false; }
+            else { open = true; openAt = i + 1; }
+        }
+        if (ci >= 0) { cands[ci].plausible = !bad; cands[ci].strong = !bad && rest > 0; }
+        if (b >= n) break;
+        a = b + 1; ++ln;
+    }
+    if (cands.empty()) return in;
+    // 가까이에 이 방식으로만 설명되는 줄이 둘 이상 있고, 어색한 후보보다 충분히 많을 때만 옮김
+    std::vector<char> take(cands.size(), 0);
+    bool any = false;
+    for (size_t k = 0; k < cands.size(); ++k) {
+        if (!cands[k].plausible) continue;
+        size_t L = cands[k].line, lo = L > kShiftWin ? L - kShiftWin : 0, hi = L + kShiftWin;
+        int strong = 0, badc = 0;
+        for (size_t j = k; j-- > 0 && cands[j].line >= lo;) { if (cands[j].strong) strong++; else if (!cands[j].plausible) badc++; }
+        for (size_t j = k; j < cands.size() && cands[j].line <= hi; ++j) { if (cands[j].strong) strong++; else if (!cands[j].plausible) badc++; }
+        int sp = 0, narr = 0;
+        {
+            auto it = std::lower_bound(spans.begin(), spans.end(), std::make_pair(lo, (char)0));
+            for (; it != spans.end() && it->first <= hi; ++it) { sp++; if (it->second) narr++; }
+        }
+        // 따옴표 안이 서술로 끝나는 경우가 많으면(짝이 어긋나 대사·서술이 뒤바뀐 글) 옮기지 않음
+        if (strong >= 2 && strong >= badc * 3 && narr * 6 <= sp) {
+            // 앞쪽 내용 있는 줄의 끝 글자 뒤로 옮김 (그 끝 글자가 따옴표면 그대로 둠)
+            size_t e = cands[k].q;
+            while (e > 0 && blank(in[e - 1])) --e;
+            size_t v = e; while (v > 0 && isInvisible(in[v - 1])) --v;
+            if (v == 0 || in[v - 1] == '"') continue;
+            bool nl = false;
+            for (size_t t = e; t < cands[k].q; ++t) if (in[t] == '\n') { nl = true; break; }
+            if (!nl) continue;  // 앞에 줄바꿈이 없음 (글 맨 앞 등)
+            take[k] = 1; any = true;
+        }
+    }
+    if (!any) return in;
+    std::vector<size_t> insAfter;  // 이 위치 글자 뒤에 따옴표를 넣음 (차례대로)
+    std::vector<size_t> from;      // 옮겨 온 따옴표의 원래 위치
+    std::vector<char> skip(n, 0);
+    for (size_t k = 0; k < cands.size(); ++k) {
+        if (!take[k]) continue;
+        size_t e = cands[k].q;
+        while (e > 0 && blank(in[e - 1])) --e;
+        insAfter.push_back(e - 1); from.push_back(cands[k].q); skip[cands[k].q] = 1;
+    }
+    std::u32string w;
+    w.reserve(n);
+    perm.reserve(n);
+    size_t ip = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (!skip[i]) { w += in[i]; perm.push_back((int)i); }
+        while (ip < insAfter.size() && insAfter[ip] == i) { w += U'"'; perm.push_back((int)from[ip]); ++ip; }
+    }
+    return w;
+}
+
 // 둥근 따옴표와 곧은 따옴표가 섞여 짝을 이루는 경우("“대사" / ""대사”")를 찾아
 // 곧은 쪽을 둥근 짝으로 보고 처리한 뒤, 결과에서는 원래 곧은 따옴표로 되돌린다.
 static const size_t kMixQuoteSpan = 3000;
+static std::u32string TidyMixed(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
 std::u32string TidyProcess(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+    std::vector<int> perm;
+    std::u32string w = fixShiftedQuotes(in, perm);
+    if (perm.empty()) return TidyMixed(in, opt, rep, outMap);
+    std::vector<int> m;
+    std::u32string out = TidyMixed(w, opt, rep, outMap ? &m : nullptr);
+    if (outMap) {
+        for (int& v : m) if (v >= 0 && (size_t)v < perm.size()) v = perm[v];
+        outMap->swap(m);
+    }
+    return out;
+}
+static std::u32string TidyMixed(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
     std::vector<size_t> conv;   // 둥근 따옴표로 바꿔 본 곧은 따옴표 위치
     bool anyCurly = false;
     for (C c : in) if (c == 0x201C || c == 0x201D) { anyCurly = true; break; }

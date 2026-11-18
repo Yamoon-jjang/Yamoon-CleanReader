@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.5.1).
+"""Build-time checks for the current release (v2.5.2).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,9 +23,10 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.5.1"' in main
-assert "FILEVERSION 2,5,1,0" in rc and 'VALUE "ProductVersion", "2.5.1"' in rc
-assert "야문 클린리더 v2.5.1" in manual
+assert 'kVersion = L"2.5.2"' in main
+assert "FILEVERSION 2,5,2,0" in rc and 'VALUE "ProductVersion", "2.5.2"' in rc
+assert "야문 클린리더 v2.5.2" in manual
+assert "22. v2.5.2" in manual and manual.index("21. v2.5.1") < manual.index("22. v2.5.2")
 assert "20. v2.5.0" in manual and manual.index("19. v2.4.8") < manual.index("20. v2.5.0")
 assert "21. v2.5.1" in manual and manual.index("20. v2.5.0") < manual.index("21. v2.5.1")
 assert "17. v2.4.6" in manual and "18. v2.4.7" in manual and manual.index("17. v2.4.6") < manual.index("18. v2.4.7")
@@ -133,6 +134,12 @@ assert (root / "tests/cases/promo_lines_junk/options.txt").read_text().split() =
 assert "if (!ended && encQuote && (last == 0x2015 || last == 0x2014 || last == 0x2013 || last == 0x2500 ||" in engine
 assert "bool isWeakTerm(C c) {\n    return c == 0x2026 || c == 0x2025 || c == '~'" in engine   # 줄표는 문장 끝 글자가 아님
 assert (root / "tests/cases/dash_end_dialogue/expected.txt").exists()
+# v2.5.2: 닫는 따옴표가 다음 줄 첫머리로 밀린 글은 따옴표를 대사 끝으로 옮김 (줄바꿈 자리만 바뀜)
+assert "static std::u32string fixShiftedQuotes(" in engine and "std::u32string w = fixShiftedQuotes(in, perm);" in engine
+assert "if (open && hg && narrEnd(openAt, i)) { openAt = i + 1; }" in engine          # 서술로 끝나는 대사 = 짝 어긋남, 다시 맞춤
+assert "strong >= 2 && strong >= badc * 3 && narr * 6 <= sp" in engine                 # 근처 증거가 있을 때만
+assert (root / "tests/cases/shifted_close_quote/expected.txt").exists()
+assert (root / "tests/cases/stray_quote_glued_dialogue/expected.txt").exists()        # 짝 없는 따옴표가 섞인 보통 글은 그대로
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
@@ -149,11 +156,11 @@ assert "kColorCustom = 9;" in main and "vcolor3" in main and "v3 = v2 == 8 ? kCo
 assert "case WM_XBUTTONUP:\n            return TRUE;" in main
 assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                                      # 새 버전 확인: 브라우저로 열기만
 
-# Confirm the engine is exactly the reviewed v2.5.1 blob (v2.5.0 + speech that trails off in a
-# dash or ・・ right before its closing quote ends there: afterClose only),
+# Confirm the engine is exactly the reviewed v2.5.2 blob (v2.5.1 + closing quotes pushed to the
+# start of the next line are moved back to the end of the speech: fixShiftedQuotes only),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "9bdb0e035cbc236a6773050e775a4c75c4a1024b", actual
+assert actual == "4f805b5d53f7cd7566162ce8e3bf59374462fcba", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -195,4 +202,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.5.1 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.5.2 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
