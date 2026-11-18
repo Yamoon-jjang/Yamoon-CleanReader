@@ -6,6 +6,7 @@
 #define _UNICODE
 #endif
 #include <windows.h>
+#include <atomic>
 #include <commctrl.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -61,7 +62,7 @@ enum {
     ID_READ, ID_MODE_TIDY, ID_VRESET, ID_RTOC, ID_RFIND, ID_RMARK, ID_RFULL,
     ID_MARK_ADD, ID_MARK_CLEAR, ID_THEME, ID_RECENT, ID_RECENT_CLEAR, ID_THEME_SYS, ID_THEME_LIGHT, ID_THEME_DARK, ID_SIZE_UP, ID_SIZE_DOWN, ID_VFONT, ID_VSIZE, ID_VCOLOR, ID_VFG, ID_VBG, ID_VLINE, ID_VMARGIN, ID_VBOLD,
     ID_CHG, ID_RAUTO, ID_VINDENT, ID_RESUME, ID_ABOUT_UPDATE, ID_AUTO_OFF,
-    TIMER_LONG = 1, TIMER_SRC = 2, TIMER_SAVED = 3, TIMER_READ = 4, TIMER_CHG = 5, TIMER_AUTO = 6,
+    TIMER_LONG = 1, TIMER_SRC = 2, TIMER_SAVED = 3, TIMER_READ = 4, TIMER_CHG = 5, TIMER_AUTO = 6, TIMER_BUSY = 8,
     ID_AUTO_BASE = 29500,  // 자동 넘김 간격 메뉴 항목
     ID_TOC_BASE = 20000, ID_MARK_BASE = 24000, ID_RECENT_BASE = 28000  // 목차·책갈피 메뉴 항목
 };
@@ -1986,6 +1987,7 @@ static bool g_epub = false;                 // 지금 글이 EPUB 전자책에�
 static const U32 kMergeSep = U"\n\n\n";   // 합칠 때 파일 사이
 
 // 합친 글은 파일마다 형식(빈 줄, 고정폭 등)이 다를 수 있으므로 파일별로 정리해 이어 붙임
+static std::atomic<int> g_progDone{0}, g_progTotal{0};  // 뒤에서 정리하는 중 진행 (합친 글: 끝낸 파일 수 / 전체)
 static U32 TidyParts(const U32& text, const std::vector<size_t>& bounds, const TidyOptions& o, TidyReport* rep, std::vector<int>* map) {
     if (bounds.size() < 2) return TidyProcess(text, o, rep, map);
     U32 out;
@@ -1998,6 +2000,7 @@ static U32 TidyParts(const U32& text, const std::vector<size_t>& bounds, const T
         TidyReport r;
         std::vector<int> m;
         U32 part = TidyProcess(text.substr(a, b - a), o, &r, map ? &m : nullptr);
+        g_progDone.fetch_add(1);
         while (!part.empty() && part.back() == '\n') { part.pop_back(); if (map && !m.empty()) m.pop_back(); }
         if (!out.empty()) {
             for (size_t q = 0; q < kMergeSep.size(); ++q) { out += '\n'; if (map) map->push_back((int)a); }
@@ -2183,6 +2186,88 @@ static void FinishReprocess(ProcJob& j) {
     if (MEAS_ON()) PostMessageW(g_hwnd, WM_APP_MEAS, 0, 0);
 }
 
+// 큰 글을 뒤에서 정리하는 동안 결과 칸 가운데에 띄우는 안내 (먹통처럼 보이지 않게, v2.5.3)
+static HWND g_busyWnd = nullptr;
+static DWORD g_busyT0 = 0;
+static wstring g_busyMsg;
+static bool g_busyShown = false;
+static LRESULT CALLBACK BusyNoteProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    if (m == WM_PAINT) {
+        PAINTSTRUCT ps; HDC dc = BeginPaint(h, &ps);
+        RECT rc; GetClientRect(h, &rc);
+        HBRUSH bg = CreateSolidBrush(col::editBg);
+        FillRect(dc, &rc, bg); DeleteObject(bg);
+        HPEN pen = CreatePen(PS_SOLID, 1, col::editText);
+        HGDIOBJ op = SelectObject(dc, pen), ob = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
+        SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(pen);
+        SetBkMode(dc, TRANSPARENT); SetTextColor(dc, col::editText);
+        HGDIOBJ of = SelectObject(dc, g_uiFont);
+        RECT tr = rc; InflateRect(&tr, -12, -8);
+        RECT cr = tr;  // 여러 줄 글은 높이를 재서 세로 가운데에
+        DrawTextW(dc, g_busyMsg.c_str(), -1, &cr, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+        int th = cr.bottom - cr.top, off = ((tr.bottom - tr.top) - th) / 2;
+        if (off > 0) tr.top += off;
+        DrawTextW(dc, g_busyMsg.c_str(), -1, &tr, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        SelectObject(dc, of);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    if (m == WM_NCHITTEST) return HTTRANSPARENT;
+    if (m == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    return DefWindowProcW(h, m, wp, lp);
+}
+static void BusyPlace() {
+    if (!g_busyWnd || !g_dst) return;
+    RECT r; GetWindowRect(g_dst, &r);
+    int w = std::min<int>(r.right - r.left - 20, 420), hh = 76;
+    if (w < 200) w = 200;
+    SetWindowPos(g_busyWnd, nullptr, (r.left + r.right - w) / 2, (r.top + r.bottom - hh) / 2, w, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+static void BusyText(const wstring& msg) {
+    g_busyMsg = msg;
+    if (g_busyWnd && g_busyShown) { InvalidateRect(g_busyWnd, nullptr, TRUE); UpdateWindow(g_busyWnd); }
+}
+static wstring BusyLine() {
+    DWORD sec = (GetTickCount() - g_busyT0) / 1000;
+    wstring m = L"정리하는 중입니다…";
+    int tot = g_progTotal.load(), done = g_progDone.load();
+    if (tot > 1) m += L"  (" + std::to_wstring(std::min(done, tot)) + L" / " + std::to_wstring(tot) + L" 파일)";
+    m += L"\n" + std::to_wstring(sec) + L"초 지남 · 큰 글은 잠시 걸립니다. 그동안 설정을 바꿔도 됩니다.";
+    return m;
+}
+static void BusyShow(bool on) {
+    if (!on) {
+        KillTimer(g_hwnd, TIMER_BUSY);
+        if (g_busyWnd) ShowWindow(g_busyWnd, SW_HIDE);
+        g_busyShown = false;
+        return;
+    }
+    if (!g_busyWnd) {
+        WNDCLASSEXW wc = {sizeof(wc)};
+        wc.lpfnWndProc = BusyNoteProc; wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"YCRBusyNote";
+        wc.hCursor = LoadCursorW(nullptr, IDC_WAIT);
+        RegisterClassExW(&wc);
+        g_busyWnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, L"YCRBusyNote", L"", WS_POPUP, 0, 0, 10, 10,
+                                    g_hwnd, nullptr, wc.hInstance, nullptr);
+    }
+    SetTimer(g_hwnd, TIMER_BUSY, 500, nullptr);  // 0.5초가 넘게 걸릴 때만 보임 (짧은 정리는 깜빡이지 않게)
+}
+static void BusyTick() {
+    if (!g_busy) { BusyShow(false); return; }
+    if (!g_busyShown && GetTickCount() - g_busyT0 >= 500 && g_busyWnd && !IsIconic(g_hwnd)) {
+        BusyPlace();
+        g_busyMsg = BusyLine();
+        ShowWindow(g_busyWnd, SW_SHOWNOACTIVATE);
+        g_busyShown = true;
+    }
+    if (g_busyShown) {
+        BusyPlace();
+        BusyText(BusyLine());
+        SetStatus(L"정리하는 중입니다… " + std::to_wstring((GetTickCount() - g_busyT0) / 1000) + L"초");
+    }
+}
+
 static DWORD WINAPI ProcThread(LPVOID p) {
     ProcJob* j = (ProcJob*)p;
     auto t0 = std::chrono::steady_clock::now();
@@ -2198,8 +2283,12 @@ static void StartJob() {
     j->bounds = g_mergeBounds;
     j->o = ReadOptions();
     j->gen = g_gen;
+    if (!g_busy) g_busyT0 = GetTickCount();  // 설정을 바꿔 다시 정리할 때도 처음 시작한 때부터 셈
+    g_progTotal = (int)std::max<size_t>(1, j->bounds.size());
+    g_progDone = 0;
     g_busy = true;
     g_again = false;
+    BusyShow(true);
     SetStatus(L"정리하는 중입니다… (큰 파일은 몇 초 걸립니다)");
     AfterTextChange();
     HANDLE th = CreateThread(nullptr, 8 << 20, ProcThread, j, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
@@ -2210,15 +2299,19 @@ static void StartJob() {
 }
 // 뒤에서 한 정리가 끝남
 static void OnProcDone(ProcJob* j) {
-    g_busy = false;
     if (j->gen != g_gen || g_again) {  // 그 사이 글이나 옵션이 바뀜: 다시
         delete j;
-        if (!g_text.empty()) StartJob(); else AfterTextChange();
+        if (!g_text.empty()) { BusyText(L"설정이 바뀌어 다시 정리하는 중입니다…"); StartJob(); }
+        else { g_busy = false; BusyShow(false); AfterTextChange(); }
         return;
     }
+    // 결과를 화면에 넣는 동안(큰 글은 몇 초) 창이 멈춘 것처럼 보이지 않게 안내를 바꿔 둠
+    if (g_busyShown) BusyText(L"정리를 마쳤습니다. 결과를 화면에 넣는 중입니다…");
+    g_busy = false;
     MEAS_MARK(L"정리 엔진 (뒤에서 처리, 엔진만 " + meas::Num(j->ms) + L" ms)");
     FinishReprocess(*j);
     delete j;
+    BusyShow(false);
     SetStatus((g_path.empty() ? L"정리했습니다." : L"정리했습니다: " + (g_mergeFiles.empty() ? g_path : FileName(g_path))) + g_restoreNote);
     g_restoreNote.clear();
     AfterTextChange();
@@ -5282,8 +5375,31 @@ static void BwUpdateButtons() {
     ShowWindow(GetDlgItem(g_bwWnd, ID_BW_OPENDIR), (!run && !g_bwLastDir.empty()) ? SW_SHOW : SW_HIDE);
     InvalidateRect(g_bwWnd, nullptr, FALSE);
 }
-static void BwAddFiles(const std::vector<wstring>& files) {
+// 이 프로그램이 앞서 만든 결과 파일인가 (v2.5.3): 합쳐 연 글의 저장본(…_합본_정리.txt, …_합본.txt)이나,
+// 원본이 함께 골라진 …_정리.txt. 폴더의 파일을 모두 골라 다시 합치면 지난 결과가 끼어 들어가 파일이 계속 커지므로 뺌
+static bool EndsWithI(const wstring& s, const wchar_t* t) {
+    size_t n = wcslen(t);
+    return s.size() >= n && _wcsicmp(s.c_str() + s.size() - n, t) == 0;
+}
+static wstring StemOf(const wstring& f) {
+    size_t sl = f.find_last_of(L"\\/"), d = f.find_last_of(L'.');
+    return (d == wstring::npos || (sl != wstring::npos && d < sl)) ? f : f.substr(0, d);
+}
+static bool IsOwnOutput(const wstring& f, const std::vector<wstring>& all) {
+    if (EndsWithI(f, L"_합본_정리.txt") || EndsWithI(f, L"_합본.txt")) return true;
+    if (!EndsWithI(f, L"_정리.txt")) return false;
+    wstring base = f.substr(0, f.size() - wcslen(L"_정리.txt"));
+    for (auto& g : all) if (_wcsicmp(g.c_str(), f.c_str()) != 0 && _wcsicmp(StemOf(g).c_str(), base.c_str()) == 0) return true;
+    return false;
+}
+static void BwAddFiles(const std::vector<wstring>& files0) {
     int added = 0;
+    std::vector<wstring> all;
+    for (auto& b : g_bw) all.push_back(b.path);
+    for (auto& f : files0) all.push_back(f);
+    std::vector<wstring> files, own;
+    for (auto& f : files0) (IsOwnOutput(f, all) ? own : files).push_back(f);
+    if (files.empty()) { files.swap(own); }  // 결과 파일만 골랐으면 일부러 고른 것: 그대로 넣음
     for (auto& f : files) {
         bool dup = false;
         for (auto& b : g_bw) if (_wcsicmp(b.path.c_str(), f.c_str()) == 0) { dup = true; break; }
@@ -5297,7 +5413,9 @@ static void BwAddFiles(const std::vector<wstring>& files) {
         added++;
     }
     BwRefresh();
-    BwSetMsg(std::to_wstring(g_bw.size()) + L"개 파일. 순서는 [위로]·[아래로]로 바꿀 수 있습니다.");
+    wstring msg = std::to_wstring(g_bw.size()) + L"개 파일. 순서는 [위로]·[아래로]로 바꿀 수 있습니다.";
+    if (!own.empty()) msg = L"앞서 정리해 저장한 결과 파일 " + std::to_wstring(own.size()) + L"개(…_정리.txt, …_합본_정리.txt)는 빼고 넣었습니다. " + msg;
+    BwSetMsg(msg);
     BwUpdateButtons();
 }
 static std::vector<wstring> PickFiles(HWND owner, const wchar_t* title) {
@@ -6589,6 +6707,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         Layout();
         InvalidateRect(h, nullptr, FALSE);
+        if (g_busyShown) { if (wp == SIZE_MINIMIZED) ShowWindow(g_busyWnd, SW_HIDE); else { BusyPlace(); ShowWindow(g_busyWnd, SW_SHOWNOACTIVATE); } }
+        return 0;
+    case WM_MOVE:
+        if (g_busyShown) BusyPlace();
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mm = (MINMAXINFO*)lp;
@@ -6695,6 +6817,7 @@ static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (wp == TIMER_CHG) { ChgTick(); return 0; }    // 바뀐 곳 표시 (정리 모드)
+        if (wp == TIMER_BUSY) { BusyTick(); return 0; }  // 큰 글 정리 중 안내
         if (wp == TIMER_AUTO) { AutoTick(); return 0; }  // 자동 넘김 (읽기 모드)
         KillTimer(h, wp);
         if (wp == TIMER_SAVED) { g_savedFlash = false; InvalidateRect(g_btnSave, nullptr, FALSE); return 0; }

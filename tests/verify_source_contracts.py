@@ -159,6 +159,11 @@ assert "if (blockStyle && opt.blankMode == 0) {" in engine and "longBlock[k] = 1
 assert "static void glueLoneQuotes(" in engine
 assert (root / "tests/cases/half_space_dialogue_junction/expected.txt").exists()
 assert (root / "tests/cases/long_block_sentence_lines/expected.txt").exists()
+# v2.5.3: 합치기 목록에서 앞서 만든 결과 파일 빼기 · 큰 글 정리 중 결과 칸 안내
+assert "static bool IsOwnOutput(const wstring& f, const std::vector<wstring>& all)" in main
+assert "(IsOwnOutput(f, all) ? own : files).push_back(f);" in main
+assert "static void BusyShow(bool on)" in main and "BusyShow(true);" in body("static void StartJob()")
+assert "BusyShow(false);" in body("static void OnProcDone(ProcJob* j)") and "g_progDone.fetch_add(1);" in main
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
