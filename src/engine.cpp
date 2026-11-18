@@ -2624,7 +2624,132 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
 // 곧은 쪽을 둥근 짝으로 보고 처리한 뒤, 결과에서는 원래 곧은 따옴표로 되돌린다.
 static const size_t kMixQuoteSpan = 3000;
 static std::u32string TidyMixed(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
+// 한 글 안에서 빈 줄 쓰는 방식이 크게 바뀌는 곳 찾기 (여러 소설을 이어 붙인 합본 등)
+//   앞부분: 줄마다 빈 줄 / 뒷부분: 빈 줄 없이 줄바꿈만  (또는 그 반대)
+// 빈 줄 구조는 글 전체를 보고 판단하므로, 이런 글은 한쪽 방식에 맞춰져 다른 쪽 문단이 틀어진다
+// (빈 줄 없는 쪽의 문단이 줄바꿈만으로 이어 붙는 등). 그래서 이런 곳에서 글을 나눠 따로 정리한다.
+// 두 구간 모두 충분히 길고(각 kStyleRun줄 이상) 방식이 뚜렷할 때만 나눔 — 보통 글은 한 번에 정리(예전 그대로)
+static const int kStyleRun = 200;   // 한 방식이 이어져야 하는 최소 줄 수(내용 있는 줄)
+static const int kStyleWin = 50;    // 방식을 보는 창(줄 수)
+static std::vector<size_t> styleCuts(const std::u32string& in) {
+    std::vector<size_t> cuts;
+    struct L { size_t a; int gap; bool endS; };
+    std::vector<L> ls;
+    int gap = 0;
+    size_t a = 0, n = in.size();
+    while (a < n) {
+        size_t b = in.find('\n', a);
+        if (b == std::u32string::npos) b = n;
+        size_t f = a, e = b;
+        while (f < e && (isWS(in[f]) || isInvisible(in[f]) || in[f] == '\r')) ++f;
+        while (e > f && (isWS(in[e - 1]) || isInvisible(in[e - 1]) || in[e - 1] == '\r')) --e;
+        if (f == e) gap++;
+        else {
+            C x = in[e - 1];
+            bool endS = isTermChar(x) || isCloseQuote(x) || x == 0x2026;
+            ls.push_back({a, ls.empty() ? 0 : gap, endS});
+            gap = 0;
+        }
+        a = b + 1;
+    }
+    int m = (int)ls.size();
+    if (m < 2 * kStyleRun) return cuts;
+    // 각 줄 둘레(앞뒤 kStyleWin/2줄)에서 빈 줄이 앞에 있는 줄의 비율로 방식 판정: 1 줄마다 빈 줄, 0 빈 줄 없음, -1 애매
+    std::vector<int> pre(m + 1, 0);
+    for (int i = 0; i < m; ++i) pre[i + 1] = pre[i] + (ls[i].gap >= 1 ? 1 : 0);
+    std::vector<int> st(m, -1);
+    for (int i = 0; i < m; ++i) {
+        int lo = std::max(1, i - kStyleWin / 2), hi = std::min(m, i + kStyleWin / 2);
+        int cnt = hi - lo; if (cnt < 10) continue;
+        int bl = pre[hi] - pre[lo];
+        if (bl * 10 >= cnt * 9) st[i] = 1;
+        else if (bl * 50 <= cnt) st[i] = 0;
+    }
+    // 같은 방식이 이어지는 구간 (애매한 줄은 건너뜀)
+    struct Run { int s, e, k; };
+    std::vector<Run> runs;
+    for (int i = 0; i < m; ++i) {
+        if (st[i] < 0) continue;
+        if (!runs.empty() && runs.back().k == st[i]) runs.back().e = i;
+        else runs.push_back({i, i, st[i]});
+    }
+    // 짧은 구간은 없는 것으로 보고 앞뒤를 다시 이음
+    std::vector<Run> big;
+    for (auto& r : runs) {
+        if (r.e - r.s + 1 < kStyleRun) continue;
+        if (!big.empty() && big.back().k == r.k) big.back().e = r.e;
+        else big.push_back(r);
+    }
+    // 두 구간 모두 줄이 대개 문장 끝에서 끝나야 함 (고정폭으로 끊긴 글은 나누지 않음 — 그런 글은 따로 다룸)
+    auto ended = [&](const Run& r) {
+        int c = 0;
+        for (int i = r.s; i <= r.e; ++i) c += ls[i].endS;
+        return c * 10 >= (r.e - r.s + 1) * 6;
+    };
+    for (size_t k = 1; k < big.size(); ++k) {
+        if (!ended(big[k - 1]) || !ended(big[k])) continue;
+        // 이 사이(앞뒤 창 너비만큼 넓혀)에서 방식이 바뀜: 앞은 앞 방식, 뒤는 뒤 방식에 가장 잘 맞는 자리
+        int s = std::max(big[k - 1].s + 1, big[k - 1].e + 1 - kStyleWin), e = std::min(big[k].e, big[k].s + kStyleWin);
+        int kb = big[k - 1].k, c = -1, bestScore = -1;
+        {
+            // score(c) = [s, c) 중 앞 방식에 맞는 줄 + [c, e] 중 뒤 방식에 맞는 줄
+            auto fit = [&](int i, int kind) { return kind == 1 ? ls[i].gap >= 1 : ls[i].gap == 0; };
+            int left = 0, right = 0;
+            for (int i = s; i <= e; ++i) right += fit(i, 1 - kb);
+            for (int x = s; x <= e; ++x) {
+                int sc = left + right;
+                if (sc > bestScore) { bestScore = sc; c = x; }
+                left += fit(x, kb); right -= fit(x, 1 - kb);
+            }
+        }
+        if (c < 1) c = (s + e) / 2;
+        int best = -1;
+        for (int d = 0; d <= 5 && best < 0; ++d) {
+            if (c - d >= 1 && ls[c - d - 1].endS) best = c - d;
+            else if (c + d < m && c + d >= 1 && ls[c + d - 1].endS) best = c + d;
+        }
+        if (best < 1) best = c;
+        if (best >= 1 && best < m && (cuts.empty() || ls[best].a > cuts.back())) cuts.push_back(ls[best].a);
+    }
+    return cuts;
+}
+static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
 std::u32string TidyProcess(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+    std::vector<size_t> cuts;
+    if (opt.blankMode == 0) cuts = styleCuts(in);
+    if (cuts.empty()) return TidyWhole(in, opt, rep, outMap);
+    std::u32string out;
+    TidyReport sum;
+    std::vector<int> map;
+    std::vector<size_t> bounds{0};
+    for (size_t c : cuts) bounds.push_back(c);
+    bounds.push_back(in.size());
+    for (size_t k = 0; k + 1 < bounds.size(); ++k) {
+        size_t a = bounds[k], b = bounds[k + 1];
+        TidyReport r;
+        std::vector<int> m;
+        std::u32string part = TidyWhole(in.substr(a, b - a), opt, &r, outMap ? &m : nullptr);
+        while (!part.empty() && part.back() == '\n') { part.pop_back(); if (!m.empty()) m.pop_back(); }
+        if (part.empty()) continue;
+        if (!out.empty()) {  // 구간 사이: 설정대로 문단 사이 빈 줄 또는 줄바꿈만
+            for (int q = 0; q < (opt.paraSep == 1 ? 1 : 2); ++q) { out += '\n'; map.push_back((int)a); }
+        }
+        out += part;
+        if (outMap) for (int v : m) map.push_back(v >= 0 ? v + (int)a : v);
+        sum.inLines += r.inLines; sum.textLines += r.textLines; sum.outParas += r.outParas;
+        sum.doubleSpaced |= r.doubleSpaced; sum.listLike |= r.listLike; if (r.wrapWidth) { sum.wrapWidth = r.wrapWidth; sum.wrapCut = r.wrapCut; }
+        sum.indentMarks |= r.indentMarks; sum.joined |= r.joined; sum.longestLine = std::max(sum.longestLine, r.longestLine);
+        sum.spaceFixes += r.spaceFixes; sum.pageNumLines += r.pageNumLines; sum.htmlFixes += r.htmlFixes; sum.letterSpaced |= r.letterSpaced;
+        sum.wideGapBreaks += r.wideGapBreaks; sum.junkLines += r.junkLines; sum.charFixes += r.charFixes; sum.replaceHits += r.replaceHits;
+        sum.jamoFixes += r.jamoFixes; sum.chapterBreaks += r.chapterBreaks; sum.sceneBreaks += r.sceneBreaks; sum.unevenGaps |= r.unevenGaps;
+    }
+    out += '\n';
+    map.push_back((int)in.size());
+    if (rep) *rep = sum;
+    if (outMap) outMap->swap(map);
+    return out;
+}
+static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
     std::vector<int> perm;
     std::u32string w = fixShiftedQuotes(in, perm);
     if (perm.empty()) return TidyMixed(in, opt, rep, outMap);
