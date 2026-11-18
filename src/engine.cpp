@@ -2124,6 +2124,21 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         return U" ";
     };
 
+    // 빈 줄로 문단을 나눈 글이라도 빈 줄 없이 길게(8줄 이상) 이어진 덩어리의 줄이 대부분 문장으로 끝나면
+    // 한 문단이 아니라 문단 경계(빈 줄)를 빠뜨린 것 — 그 줄들은 각각 문단으로 봄 (짧은 덩어리·시·가사는 그대로)
+    std::vector<char> longBlock(n, 0);
+    if (blockStyle && opt.blankMode == 0) {  // [빈 줄]을 직접 고른 경우는 그대로
+        for (int i = 0; i < n;) {
+            int j = i + 1;
+            while (j < n && lines[j].gap == 0) ++j;
+            if (j - i >= 8) {
+                int ended = 0;
+                for (int k = i; k < j; ++k) if (endKind(lines[k].t) == 2) ended++;
+                if (ended * 10 >= (j - i) * 7) for (int k = i; k < j; ++k) longBlock[k] = 1;
+            }
+            i = j;
+        }
+    }
     // 6) 문단 만들기
     struct Para { TM x; int kind; int gap = 0; bool scene = false; bool noScene = false; bool cont = false; bool soft = false; int startQ = 0; bool fromLong = false; bool inQuote = false; bool speechCont = false; bool speechEnd = false; };  // speechCont/End: 긴 대사를 나눈 둘째 줄부터 / 마지막 줄  // inQuote: 문단 전체가 대사 속(닫는 따옴표는 뒤 문단에)  // fromLong: 원래 400자가 넘던 문단(한 줄 글 등)에서 나온 조각  // soft: 빈 줄로 문단을 나눈 글의 문단 안 줄바꿈  // cont: 앞 조각과 같은 원문 문단(문장마다 나눈 것)  // kind: 0 본문, 1 제목, 2 구분선
     auto lineTM = [&](const Line& L) { TM r; r.t = L.t; r.m = L.m; return r; };
@@ -2141,7 +2156,7 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 if (parts > 1) cur.kind = 0;
                 paras.push_back(std::move(cur));
                 cur = Para{lineTM(lines[i]), lines[i].sym ? 2 : lines[i].head ? 1 : 0, lines[i].gap};
-                cur.soft = (blockStyle || listLike) && lines[i].gap == 0;
+                cur.soft = (listLike || (blockStyle && !longBlock[i])) && lines[i].gap == 0;
                 cur.noScene = lines[i].afterJunk;
                 parts = 1;
             }
@@ -2568,7 +2583,12 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
             if (cl) { if (open) closeSpan(i, ln); open = false; }
             else { open = true; openAt = i + 1; }
         }
-        if (ci >= 0) { cands[ci].plausible = !bad; cands[ci].strong = !bad && rest > 0; }
+        if (ci >= 0) {
+            // 줄 첫머리 따옴표 바로 뒤가 공백이면(" 그는 말을 마치고…) 여는 따옴표일 수 없음 — 앞 대사를 닫는 것
+            size_t q0 = cands[ci].q + 1;
+            bool spaceAfter = q0 < b && (in[q0] == ' ' || in[q0] == 0x3000);
+            cands[ci].plausible = !bad; cands[ci].strong = !bad && (rest > 0 || spaceAfter);
+        }
         if (b >= n) break;
         a = b + 1; ++ln;
     }
@@ -2738,51 +2758,142 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
         C c = in[i];
         if (c == '\n') { ls = i + 1; continue; }
         if (!(isTermChar(c) || isCloseQuote(c))) continue;
-        if (i + 1 >= n || !sp(in[i + 1])) continue;
-        bool content = false;  // 이 글자 앞에 줄 내용이 있음 (줄 첫머리 들여쓰기 뒤가 아님)
-        for (size_t k = ls; k < i; ++k) if (!sp(in[k]) && !isInvisible(in[k])) { content = true; break; }
         size_t j = i + 1; int full = 0;
         while (j < n && sp(in[j])) { if (in[j] == 0x3000) full++; ++j; }
-        // 줄 첫머리의 닫는 따옴표 + 전각 두 칸("　　"다음 대사)은 앞 줄 대사를 닫는 것 — 따옴표만 남기고 나눔
-        // 닫는 따옴표와 다음 대사의 여는 따옴표 사이의 전각 공백 섞인 넓은 공백("…"　 "…")도 문단 구분 (빈 대사로 잘못 짝짓지 않게)
-        bool cjkLine = false;  // 한글·한자·가나가 있는 줄만 (영문 소설의 문장 뒤 두 칸 띄어쓰기는 건드리지 않음)
-        for (size_t k = ls; k < n && in[k] != '\n'; ++k) if (isHangul(in[k]) || isKanaHan(in[k])) { cjkLine = true; break; }
-        bool junction = cjkLine && c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E) &&
-                        full >= 1 && j - (i + 1) >= 2;  // 전각 공백이 든 넓은 공백만 (반각 두 칸은 띄어쓰기 습관일 수 있음)
-        if (!content && !isTermChar(c) && full < 2 && !junction) continue;
+        bool content = false;  // 이 글자 앞에 줄 내용이 있음 (줄 첫머리 들여쓰기 뒤가 아님)
+        for (size_t k = ls; k < i; ++k) if (!sp(in[k]) && !isInvisible(in[k])) { content = true; break; }
+        auto cjkLine = [&]() {  // 한글·한자·가나가 있는 줄만 (영문 소설의 문장 뒤 두 칸 띄어쓰기 등은 건드리지 않음)
+            for (size_t k = ls; k < n && in[k] != '\n'; ++k) if (isHangul(in[k]) || isKanaHan(in[k])) return true;
+            return false;
+        };
+        // 대사를 닫는 따옴표 바로 뒤에서 다음 대사가 열리는 곳 — 여러 줄 대사의 끝과 다음 대사가 한 줄에 붙은 것:
+        //   …하하……"　　"안 돼   (전각 공백 든 넓은 공백)
+        //   …것이다!" "너는…      (줄의 첫 따옴표가 글자 바로 뒤에 붙은 닫는 따옴표 — 앞 줄에서 연 대사를 닫음)
+        //   …주마!""오랜만에…     (띄어쓰기 없이 붙은 것도)
+        //   " "연아, …           (줄 첫머리의 닫는 따옴표 + 공백 + 다음 대사)
+        // 그대로 두면 "　　" / " " 를 빈 대사로 짝지어 닫는 따옴표가 다음 대사 앞에 붙음(""안 돼)
+        if (c != '\'' && isCloseQuote(c) && j < n && (in[j] == '"' || in[j] == 0x201C || in[j] == 0x300C || in[j] == 0x300E)) {
+            bool firstQ = true;
+            for (size_t k = ls; k < i; ++k) {
+                C q = in[k];
+                if (q == '"' || q == 0x201C || q == 0x201D || q == 0x300C || q == 0x300D || q == 0x300E || q == 0x300F) { firstQ = false; break; }
+            }
+            bool j0 = full >= 1 && j - (i + 1) >= 2;
+            bool j1 = content && firstQ && i > ls && !sp(in[i - 1]) && !isInvisible(in[i - 1]);
+            bool j2 = !content && j > i + 1;
+            if ((j0 || j1 || j2) && cjkLine()) { indent++; runs.push_back({i + 1, j}); continue; }
+        }
+        if (j == i + 1) continue;  // 뒤에 공백 없음
+        bool junction = false;
+        if (!content && !isTermChar(c) && full < 2) continue;  // 줄 첫머리 닫는 따옴표 + 전각 두 칸만 (위)
         if (j >= n || in[j] == '\n' || in[j] == '\r') continue;      // 줄 끝 공백
         if (isTermChar(in[j])) continue;
         if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }  // 전각 두 칸 들여쓰기가 붙은 것 / 대사 사이
         // 그 밖의 넓은 공백은 여기서 나누지 않음: 고정폭으로 끊긴 글을 이어 붙인 뒤 splitWideGaps가 문단 안에서 판단
+    }
+    // 줄 첫머리 닫는 따옴표 + 공백 + 서술(" 그는 말을 마치고…): 앞 줄에서 연 대사를 닫는 따옴표가 줄바꿈 뒤로 밀린 것.
+    // 앞 줄(내용 있는) 끝으로 옮김. 그 줄의 곧은 따옴표가 하나(홀수)뿐이고, 바로 앞의 따옴표 든 줄에서 대사가 열린 채일 때만
+    std::vector<std::pair<size_t, size_t>> moves;  // (앞 줄 끝 글자 위치, 옮길 따옴표 위치)
+    {
+        std::vector<std::pair<size_t, size_t>> lines;  // [a, b)
+        for (size_t a = 0; a <= n;) { size_t b = in.find('\n', a); if (b == std::u32string::npos) b = n; lines.push_back({a, b}); a = b + 1; }
+        auto fv = [&](size_t a, size_t b) { while (a < b && (sp(in[a]) || in[a] == '\r' || isInvisible(in[a]))) ++a; return a; };
+        auto lv = [&](size_t a, size_t b) { while (b > a && (sp(in[b - 1]) || in[b - 1] == '\r' || isInvisible(in[b - 1]))) --b; return b; };
+        for (size_t L = 1; L < lines.size(); ++L) {
+            size_t a = lines[L].first, b = lines[L].second, f = fv(a, b);
+            if (f + 2 >= b || in[f] != '"' || !(in[f + 1] == ' ' || in[f + 1] == 0x3000)) continue;
+            if (in[f + 1] == 0x3000 && in[f + 2] == 0x3000) continue;  // "　　 은 위에서 줄을 나눔
+            int dq = 0; bool hg = false;
+            for (size_t k = f; k < b; ++k) { if (in[k] == '"') dq++; if (isHangul(in[k])) hg = true; }
+            if (dq % 2 == 0 || !hg) continue;
+            size_t g = f + 1; while (g < b && sp(in[g])) ++g;
+            if (g >= b || in[g] == '"') continue;
+            // 앞 내용 줄
+            size_t P = L; size_t pe = 0;
+            while (P-- > 0) { pe = lv(lines[P].first, lines[P].second); if (pe > fv(lines[P].first, lines[P].second)) break; }
+            if (P >= lines.size() || pe == 0 || in[pe - 1] == '"' || isCloseQuote(in[pe - 1])) continue;
+            // 대사가 열린 채인가: 앞쪽 40줄 안에서 따옴표가 든 가장 가까운 줄에 닫는 자리의 따옴표(뒤가 공백·줄 끝)가
+            // 하나도 없고, 마지막 따옴표 뒤에 글자가 있으면 열린 채로 봄 (번역문의 군더더기 따옴표 "너무나"아름다워"도 견딤)
+            bool open = false;
+            for (size_t Q = P + 1, cnt = 0; Q-- > 0 && cnt < 40; ++cnt) {
+                size_t qa = lines[Q].first, qb = lines[Q].second, last = SIZE_MAX; int c2 = 0; bool closer = false;
+                size_t qe = lv(qa, qb);
+                for (size_t k = qa; k < qb; ++k) if (in[k] == '"') {
+                    c2++; last = k;
+                    if (k + 1 >= qe || sp(in[k + 1])) closer = true;
+                }
+                if (!c2) continue;
+                open = !closer && last + 1 < qe;
+                break;
+            }
+            if (open) { moves.push_back({pe - 1, f}); indent++; }
+        }
     }
     // 나눌 곳이 없으면 그대로
     if (indent < 1) return in;
     std::u32string w;
     w.reserve(n);
     perm.reserve(n);
-    size_t r = 0;
+    std::vector<char> skip(n, 0);
+    std::vector<std::pair<size_t, size_t>> ins;  // (이 글자 뒤에, 옮겨 올 따옴표)
+    for (auto& mv : moves) { skip[mv.second] = 1; ins.push_back(mv); }
+    std::sort(ins.begin(), ins.end());
+    size_t r = 0, ip = 0;
     for (size_t i = 0; i < n; ++i) {
         if (r < runs.size() && i == runs[r].first) {
             w += U'\n'; perm.push_back((int)i);   // 공백 자리에 줄바꿈 하나, 나머지 공백은 뺌
             i = runs[r].second - 1; ++r;
             continue;
         }
-        w += in[i]; perm.push_back((int)i);
+        if (!skip[i]) { w += in[i]; perm.push_back((int)i); }
+        while (ip < ins.size() && ins[ip].first == i) { w += U'"'; perm.push_back((int)ins[ip].second); ++ip; }
     }
     return w;
 }
 static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
 static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap);
+// 짝 잃은 따옴표 하나만 남은 줄(원문의 뒤집힌 「」·짝 안 맞는 따옴표에서 생김)은 앞 줄 끝에 붙임 — 원문에서도 그 자리
+static void glueLoneQuotes(std::u32string& out, std::vector<int>* map) {
+    auto isQ = [](C c) { return c == '"' || c == 0x201C || c == 0x201D || c == 0x300C || c == 0x300D || c == 0x300E || c == 0x300F; };
+    std::vector<char> del(out.size(), 0);
+    bool any = false;
+    size_t a = 0, n = out.size();
+    while (a < n) {
+        size_t b = out.find(U'\n', a); if (b == std::u32string::npos) b = n;
+        size_t f = a, e = b;
+        while (f < e && (isWS(out[f]) || out[f] == '\r')) ++f;
+        while (e > f && (isWS(out[e - 1]) || out[e - 1] == '\r')) --e;
+        if (e == f + 1 && isQ(out[f]) && a > 0) {
+            // 앞 내용 줄 끝을 찾아, 그 뒤부터 이 따옴표 앞까지(줄바꿈·빈 줄) 지움
+            size_t k = a;
+            while (k > 0 && (out[k - 1] == '\n' || out[k - 1] == '\r' || isWS(out[k - 1]))) --k;
+            if (k > 0 && !isQ(out[k - 1])) { for (size_t q = k; q < f; ++q) del[q] = 1; any = true; }
+        }
+        a = b + 1;
+    }
+    if (!any) return;
+    std::u32string w; std::vector<int> m;
+    for (size_t i = 0; i < n; ++i) if (!del[i]) { w += out[i]; if (map && i < map->size()) m.push_back((*map)[i]); }
+    out.swap(w);
+    if (map) map->swap(m);
+}
 std::u32string TidyProcess(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
     std::vector<int> perm;
     std::u32string w = splitWideGapLines(in, perm);
-    if (perm.empty()) return TidySplit(in, opt, rep, outMap);
     std::vector<int> m;
-    std::u32string out = TidySplit(w, opt, rep, outMap ? &m : nullptr);
-    if (outMap) {
-        for (int& v : m) if (v >= 0 && (size_t)v < perm.size()) v = perm[v]; else if (v >= 0) v = (int)in.size();
-        outMap->swap(m);
+    std::u32string out;
+    if (perm.empty()) out = TidySplit(in, opt, rep, outMap ? &m : nullptr);
+    else {
+        out = TidySplit(w, opt, rep, outMap ? &m : nullptr);
+        if (outMap) {
+            for (int& v : m) {
+                if (v >= 0 && (size_t)v < perm.size()) v = perm[v];
+                else if (v >= 0) v = (int)in.size();
+            }
+        }
     }
+    glueLoneQuotes(out, outMap ? &m : nullptr);
+    if (outMap) outMap->swap(m);
     return out;
 }
 static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {

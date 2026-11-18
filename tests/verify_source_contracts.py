@@ -148,11 +148,17 @@ assert "opt.paraSep == 1 ? 1 : 2" in engine                                     
 assert (root / "tests/cases/mixed_blank_styles/expected.txt").exists()
 # v2.5.3: 줄 가운데 붙은 전각 두 칸 들여쓰기·대사 사이 넓은 공백은 먼저 문단 줄바꿈으로 (따옴표 짝을 원문대로)
 assert "static std::u32string splitWideGapLines(" in engine and "std::u32string w = splitWideGapLines(in, perm);" in engine
-assert "if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }" in engine
+assert "if ((j0 || j1 || j2) && cjkLine()) { indent++; runs.push_back({i + 1, j}); continue; }" in engine
 assert (root / "tests/cases/indent_joined_dialogue/expected.txt").exists()
-assert "full >= 1 && j - (i + 1) >= 2;" in engine and "if (indent < 1) return in;" in engine           # 반각 두 칸·영문은 나누지 않음
+assert "bool j0 = full >= 1 && j - (i + 1) >= 2;" in engine and "if (indent < 1) return in;" in engine           # 반각 두 칸·영문은 나누지 않음
 assert "if (bl * 100 >= cnt * 15) st[i] = 1;" in engine                                                # 빈 줄로 문단을 나눈 글과 섞여도 나눔
 assert (root / "tests/cases/plain_then_block_paragraphs/expected.txt").exists()
+assert "bool j1 = content && firstQ && i > ls && !sp(in[i - 1]) && !isInvisible(in[i - 1]);" in engine    # …것이다!" "너는… / …주마!""…
+assert "moves.push_back({pe - 1, f});" in engine                                                        # 줄 첫머리 " 그는… → 앞 줄 끝으로
+assert "if (blockStyle && opt.blankMode == 0) {" in engine and "longBlock[k] = 1;" in engine            # 8줄 넘는 문장 줄 덩어리 = 줄마다 문단
+assert "static void glueLoneQuotes(" in engine
+assert (root / "tests/cases/half_space_dialogue_junction/expected.txt").exists()
+assert (root / "tests/cases/long_block_sentence_lines/expected.txt").exists()
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
 tools = (root / "src/reader_tools.h").read_text(encoding="utf-8")
 assert '#include "reader_tools.h"' in main and "inline size_t FixJosa(" in tools and "inline TocCheck CheckTocNumbers(" in tools
@@ -173,7 +179,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "d547c07c40af2cf394d14bdae6a89a703bc54607", actual
+assert actual == "6ebc13cf4bd81ca241f074b5a86da022cd55a041", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
