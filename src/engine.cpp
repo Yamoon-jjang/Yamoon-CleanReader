@@ -197,7 +197,15 @@ bool isListItemStart(const S& t) {
 }
 
 bool isHeading(const S& t, int w) {
-    if (t.empty() || w > 40) return false;
+    if (t.empty()) return false;
+    {   // "# 【제목】(1-2) 저자… 글자 수: 1234" 같은 회차 머리말은 길어도 제목
+        size_t k = 0; while (k < t.size() && (isInvisible(t[k]) || isWS(t[k]))) ++k;
+        if (k < t.size() && t[k] == '#') {
+            size_t q = k + 1; while (q < t.size() && (t[q] == '#' || t[q] == ' ')) ++q;
+            if (q < t.size() && t[q] == 0x3010 && t.find(0x3011, q) != S::npos && w <= 240) return true;
+        }
+    }
+    if (w > 40) return false;
     C c = firstVis(t);
     bool pat = false;
     if (isDigit(c)) {
@@ -2801,6 +2809,47 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
             bool j2 = !content && j > i + 1;
             if ((j0 || j1 || j2) && cjkLine()) { indent++; runs.push_back({i + 1, j}); continue; }
         }
+        // 문장이 끝난 대사의 닫는 따옴표 바로 뒤에 띄어쓰기 없이 서술이 붙은 곳(…가면 안 된다고……"류광다가):
+        // 원문의 문단 경계가 사라진 것 — 줄을 나눔. 말을 받는 말·조사("…"라고, "…"하고, "…"는)는 붙여 둠.
+        // 곧은 따옴표는 같은 줄에서 앞에 따옴표가 홀수 개 있어 닫는 것이 확실할 때만 (말했다."대사 처럼 여는 것과 헷갈리지 않게)
+        if (j == i + 1 && j < n && isHangulSyl(in[j]) && c != '\'' && isCloseQuote(c) && content) {
+            size_t pv = i; while (pv > ls && isInvisible(in[pv - 1])) --pv;
+            C pc = pv > ls ? in[pv - 1] : 0;
+            bool ended = isTermChar(pc) || pc == 0x3002 || pc == 0xFF01 || pc == 0xFF1F;
+            bool closer = c != '"';
+            if (c == '"') { int before = 0; for (size_t k = ls; k < i; ++k) if (in[k] == '"') before++; closer = before % 2 == 1; }
+            // 따옴표 앞이 서술 끝("…말했다.")이면 서술 뒤에 붙은 여는 따옴표일 수 있음 (줄 첫머리 따옴표가 밀린 닫는 것인 글)
+            if (closer && c == '"' && pv - ls >= 3 && pc == '.' && in[pv - 2] == U'다' && isHangulSyl(in[pv - 3]) && (in[pv - 3] - 0xAC00) % 28 == 20)
+                closer = false;
+            // 줄의 나머지에 같은 닫는 따옴표가 또 있으면(짝 없는 군더더기) 나누지 않음
+            if (closer) {
+                C oq = c == 0x300D ? 0x300C : c == 0x300F ? 0x300E : c == 0x201D ? 0x201C : c == 0x2019 ? 0x2018 : c;
+                int depth = 0; bool stray = false; int dq = 0;
+                for (size_t k = j; k < n && in[k] != '\n'; ++k) {
+                    if (c == '"') { if (in[k] == '"') dq++; continue; }
+                    if (in[k] == oq) depth++;
+                    else if (in[k] == c) { if (depth) depth--; else { stray = true; break; } }
+                }
+                if (c == '"' && dq % 2 == 1) stray = true;
+                if (stray) closer = false;
+            }
+            if (ended && closer && cjkLine()) {
+                // 붙여 둘 말: 여러 글자짜리는 그 말로 시작하면, 한 글자짜리는 그 글자만 있는 낱말이면
+                static const char32_t* multi[] = {U"라고", U"이라고", U"하고", U"하며", U"하면서", U"하는", U"하자", U"하니", U"하더니", U"하던", U"하곤",
+                    U"하여", U"해서", U"했", U"하였", U"한다", U"할", U"함", U"라며", U"이라며", U"라는", U"이라는", U"라니", U"이라니", U"라던",
+                    U"이란", U"냐고", U"느냐고", U"냐는", U"냐며", U"니까", U"면서", U"으로", U"까지", U"처럼", U"보다", U"마저", U"조차",
+                    U"라고요", U"하구", U"이라", U"라", U"란", nullptr};
+                static const char32_t single[] = U"며고는은를을와과에로도만이가의한";
+                size_t e = j; while (e < n && isHangulSyl(in[e])) ++e;
+                bool glue = false;
+                for (int k = 0; multi[k] && !glue; ++k) {
+                    S w = multi[k];
+                    if (in.compare(j, w.size(), w) == 0) glue = true;
+                }
+                if (!glue && e - j == 1) for (const char32_t* q = single; *q; ++q) if (in[j] == *q) { glue = true; break; }
+                if (!glue) { indent++; runs.push_back({i + 1, i + 1}); continue; }
+            }
+        }
         if (j == i + 1) continue;  // 뒤에 공백 없음
         bool junction = false;
         if (!content && !isTermChar(c) && full < 2) continue;  // 줄 첫머리 닫는 따옴표 + 전각 두 칸만 (위)
@@ -2808,6 +2857,42 @@ static std::u32string splitWideGapLines(const std::u32string& in, std::vector<in
         if (isTermChar(in[j])) continue;
         if (full >= 2 || junction) { indent++; runs.push_back({i + 1, j}); }  // 전각 두 칸 들여쓰기가 붙은 것 / 대사 사이
         // 그 밖의 넓은 공백은 여기서 나누지 않음: 고정폭으로 끊긴 글을 이어 붙인 뒤 splitWideGaps가 문단 안에서 판단
+    }
+    // 회차 머리말이 본문 줄에 붙은 곳 (여러 글을 이어 붙이다 줄바꿈이 사라진 것):
+    //   …애원하게 만들겠다고……# 【홍안타지의천루】（6-7）… 글자 수: 12757밤이 깊게 드리우고,…
+    //   → "# 【" 앞과 "글자 수: 숫자" 뒤에서 줄을 나눔
+    {
+        size_t lsx = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (in[i] == '\n') { lsx = i + 1; continue; }
+            if (in[i] == '#' && i > lsx) {
+                size_t k = i + 1; while (k < n && sp(in[k])) ++k;
+                bool content = false;
+                for (size_t q = lsx; q < i; ++q) if (!sp(in[q]) && !isInvisible(in[q])) { content = true; break; }
+                size_t a = i; while (a > lsx && sp(in[a - 1])) --a;  // 앞 공백은 줄바꿈으로
+                C pc = a > lsx ? in[a - 1] : 0;   // 앞 글이 문장 끝(…다. ……! 닫는 따옴표)일 때만
+                // "# 【" (# 뒤 한 칸, 마크다운 제목 꼴)은 앞 글과 상관없이, "#【"은 앞 글이 문장 끝일 때만
+                bool mdHead = k == i + 2 && in[i + 1] == ' ' && in[k] == 0x3010 && in.find(0x3011, k) != std::u32string::npos && in.find(0x3011, k) < k + 60;
+                if (content && k < n && (in[k] == 0x3010 || in[k] == 0x300A) &&
+                    (mdHead || isTermChar(pc) || isCloseQuote(pc) || isBrClose(pc) || pc == 0x3002 || pc == 0xFF01 || pc == 0xFF1F)) {
+                    runs.push_back({a, i}); indent++;
+                }
+            }
+            // 글자 수: 12757밤이…  /  글자수：12,757밤이…
+            if (in[i] == U'글' && in.compare(i, 2, U"글자") == 0) {
+                size_t k = i + 2; while (k < n && sp(in[k])) ++k;
+                if (k < n && in[k] == U'수') {
+                    ++k; while (k < n && sp(in[k])) ++k;
+                    if (k < n && (in[k] == ':' || in[k] == 0xFF1A)) {
+                        ++k; while (k < n && sp(in[k])) ++k;
+                        size_t d = k; while (d < n && (isDigit(in[d]) || in[d] == ',')) ++d;
+                        if (d > k && d < n && (isHangulSyl(in[d]) || isKanaHan(in[d]))) { runs.push_back({d, d}); indent++; }
+                    }
+                }
+            }
+        }
+        std::sort(runs.begin(), runs.end());
+        runs.erase(std::unique(runs.begin(), runs.end(), [](const std::pair<size_t, size_t>& x, const std::pair<size_t, size_t>& y) { return x.first == y.first; }), runs.end());
     }
     // 줄 첫머리 닫는 따옴표 + 공백 + 서술(" 그는 말을 마치고…): 앞 줄에서 연 대사를 닫는 따옴표가 줄바꿈 뒤로 밀린 것.
     // 앞 줄(내용 있는) 끝으로 옮김. 그 줄의 곧은 따옴표가 하나(홀수)뿐이고, 바로 앞의 따옴표 든 줄에서 대사가 열린 채일 때만

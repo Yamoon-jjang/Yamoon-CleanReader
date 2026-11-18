@@ -169,6 +169,9 @@ assert "{0x250C, 0x2514, 0x2510, 0x2518, 0, 0x300C, 0x300D}" in engine and "case
 assert "if (!st.empty() && st.back() == c) st.pop_back(); else qc++;" in engine                       # 대사 속 짝 맞는 인용은 셈하지 않음
 assert (root / "tests/cases/quote_variants/expected.txt").exists()
 assert "case 0x27EA: return 0x27EB; case 0x3018: return 0x3019;" in engine and (root / "tests/cases/cn_system_brackets/expected.txt").exists()
+assert "if (j == i + 1 && j < n && isHangulSyl(in[j]) && c != '\\'' && isCloseQuote(c) && content) {" in engine  # 따옴표 바로 뒤 서술
+assert "bool mdHead = " in engine and "w <= 240) return true;" in engine                                     # 붙은 회차 머리말
+assert (root / "tests/cases/glued_header_and_quote/expected.txt").exists()
 assert "static void BusyShow(bool on)" in main and "BusyShow(true);" in body("static void StartJob()")
 assert "BusyShow(false);" in body("static void OnProcDone(ProcJob* j)") and "g_progDone.fetch_add(1);" in main
 # v2.5.0 화면 기능: 계산은 reader_tools.h (tests/check_reader_tools.py가 실제로 컴파일해 시험)
@@ -191,7 +194,7 @@ assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                       
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "996ecf27dcd8fc9bdf98e190d4f883dd6937ea33", actual
+assert actual == "5529558d6d22b7fadfd34a65fc8a7c1806ab6cca", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
