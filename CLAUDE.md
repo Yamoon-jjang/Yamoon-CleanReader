@@ -32,10 +32,11 @@
 - 읽기 모드 속도가 느려지는 수정은 하지 않습니다.
 - 배포 zip에는 exe·README.txt·THIRD_PARTY_NOTICES.txt·LICENSE.txt·samples만 들어갑니다. `tests/`와 이 파일은 들어가지 않습니다.
 - 매뉴얼(`dist/README.txt`, CRLF 줄바꿈 유지)과 릴리스 설명에 개발 과정을 쓰지 않고, 배포본 기준으로 씁니다.
+- 저장소 `README.md`에는 버전별 변경 내용을 쓰지 않습니다(변경 내용은 릴리스 설명에만). 기능 소개가 바뀔 때만 고치고, 한국어 본문을 고치면 아래 English 부분도 맞춥니다.
 
 ## 버전을 올려 배포할 때
 
 `src/main.cpp`의 `kVersion`·`kDate`, `src/app.rc`의 버전 4곳, `dist/README.txt` 머리말과 맨 끝 버전 기록,
-`README.md` 맨 위 안내, `tests/verify_source_contracts.py`의 버전 확인,
+`tests/verify_source_contracts.py`의 버전 확인,
 `.github/release-notes/v<버전>.md`(이 파일이 있어야 main에 올렸을 때 릴리스가 만들어짐)를 함께 고칩니다.
 커밋은 GitHub API로 만들어 "Verified"로 표시되게 합니다(로컬 git push로 올린 커밋은 Unverified로 보임).

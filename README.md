@@ -2,26 +2,6 @@
 
 # 야문 클린리더
 
-> **v2.5.4 상태창 줄·여러 문단 대사·말줄임표 정리 보완**: 게임 상태창·시스템 문구처럼 일부러 나눈 줄(`…선택해 주세요:` / `사우`, `성별: 여` / `레벨: 75`, `——선택 성공——`)이 **한 줄로 붙던 문제**, 앞 문단 따옴표를 닫지 않고 다음 문단을 다시 따옴표로 여는 번역 소설의 긴 대사에서 **다음 대사가 띄어쓰기 없이 붙던 문제**(`…있습니다."이제 우리는`)를 고쳤습니다. 문장 끝 뒤에 띄어 쓴 말줄임표(`다음과 같다. ……`)는 앞 문장에 붙여 장면 구분처럼 떨어지지 않고, 긴 대사 속 200자 넘는 인용(서약서·편지 문구)도 문장마다 나눕니다. 그 밖의 정리 결과와 읽기 모드 속도는 v2.5.3과 같습니다.
->
-> **v2.5.3 앞뒤 형식이 다른 글(합본) 정리 보완**: 여러 글을 이어 붙인 합본처럼 한 파일 안에서 **앞부분은 빈 줄 없이 줄바꿈만, 뒷부분은 줄마다 빈 줄이거나 빈 줄로 문단을 나눈 글**처럼 형식이 크게 바뀌면, 한쪽 형식에 맞춰 판단해 **다른 쪽 문단 구분이 사라지던 문제**를 고쳤습니다. 형식이 바뀌는 곳을 찾아 앞뒤를 각각 판단하므로, **[문장마다 줄바꿈]·[문단 사이] 설정이 파일 전체에 똑같이 적용**됩니다. 또 문단 첫머리 **전각 공백 두 칸(`　　`)이 앞 대사 뒤에 붙은 글**(`…하하……"　　"안 돼`)에서 닫는 따옴표가 다음 대사 앞에 붙어 `""안 돼`처럼 되던 문제(반각 한 칸·붙은 대사, 줄 첫머리로 밀린 따옴표 포함)도 고쳐 각 대사가 따옴표 짝대로 묶이고, 빈 줄 없이 길게 이어진 문장 줄도 [문단 사이] 설정대로 나뉩니다. 폴더의 파일을 모두 골라 다시 합칠 때 앞서 저장한 결과 파일이 끼어 들어가 합본이 커지던 문제를 막았고, 큰 글 정리 중에는 결과 칸에 진행 안내가 뜹니다. 한 가지 형식으로 쓴 글의 정리 결과와 읽기 모드 속도는 v2.5.2와 같습니다.
->
-> **v2.5.2 닫는 따옴표가 밀린 대사 정리 보완**: 번역 소설 등에서 대사를 닫는 따옴표가 **다음 줄 맨 앞으로 밀려**(`넌 끝났어...` / `"그의 외침에…`, `""안 돼, 가지 마.`) 대사 안 문장이 한 줄씩 떨어진 채 남던 문제를 고쳤습니다. 밀린 따옴표를 대사 끝으로 옮겨 **한 대사로 묶습니다**(글자는 그대로, 줄 위치만 바뀜). 이렇게 밀린 줄이 근처에 여럿 있는 글에서만 작동하며, 따옴표가 바른 글과 짝 없는 따옴표가 섞인 글은 예전과 같이 정리합니다. 그 밖의 정리 결과와 읽기 모드 속도는 v2.5.1과 같습니다.
->
-> **v2.5.1 말끝을 흐린 대사 정리 보완**: 한 줄로 이어진 글에서 `"사실은――" "아아, 그래?"`처럼 **줄표(―― —— — –)나 가운뎃점 말줄임(「そう・・・」)으로 끝난 대사가 다음 대사와 한 줄로 붙어 있던 것**을, 다른 대사처럼 **따로 나누도록** 고쳤습니다. 일본어·중국어 번역 소설에 흔한 표기입니다. 대사 뒤에 붙은 서술(`"싫어――" 하고 고개를 저었다`), 문장 중간의 줄표, 장면 구분 줄(――――), 이름 사이 가운뎃점(ジョン・スミス)은 그대로 둡니다. 그 밖의 정리 결과와 읽기 모드 속도는 v2.5.0과 같습니다.
->
-> **v2.5.0 읽기·찾기·정리 확인 기능 보강**: 찾기·바꾸기에 **조사 맞춤**(인물 이름을 바꾸면 `서윤은 → 유나는`, `서윤이 → 유나가`처럼 조사도 함께)과 **찾은 곳 목록**(위치 · 회차 · 앞뒤 글), 정리 모드에 **바뀐 곳 표시**(지운 글자 분홍 · 달라진 글자 연두), 읽기 모드에 **자동 넘김** · **문단 들여쓰기** · **전자잉크 배색** · **목차의 빠진·겹친 회차 번호 알림** · 마우스 휠 단추·옆 단추 쪽 넘김, **마지막 글 이어서 열기**를 더했습니다. "쪽 번호·광고·HTML 제거"는 웹 주소가 든 홍보 줄과 회차마다 되풀이되는 "선작·추천 부탁" 줄도 지웁니다(본문·대사는 남기도록 아주 좁게 판단). 이 옵션을 켜지 않은 글의 정리 결과와 읽기 모드 속도는 v2.4.8과 같습니다.
->
-> **v2.4.8 목록·표·이모지 정리 보완**: 소설 앞뒤의 소개글처럼 목록·표·이모지가 섞인 글에서, `* 항목`·`✅ 항목` 같은 **목록 줄이 한 줄로 합쳐지던 것**, `| 이름 | 설명 |` 같은 **표가 합쳐지거나 칸 안에서 줄이 바뀌어 깨지던 것**, "말씀해 주세요! 🍵"처럼 **문장 끝 이모지가 따로 떨어지던 것**을 고쳤습니다. 그 밖의 글의 정리 결과와 읽기 모드 속도는 v2.4.7과 같습니다.
->
-> **v2.4.7 한국어 긴 대사 줄바꿈 보완**: [문장마다 줄바꿈]에서 150~190자쯤의 한국어 대사가 여러 문장이어도 한 덩어리로 남던 것을, **120자 이상이면 대사 안에서 문장마다 줄을 바꾸도록** 고쳤습니다. "응. 알았어. 빨리!"처럼 아주 짧은 문장은 몇 개씩 묶고, 혼자 낀 한두 마디는 옆 문장에 붙여 **지나치게 잘게 쪼개지지 않습니다**. 서술 문장과 외국어 글의 정리 결과, 읽기 모드 속도는 v2.4.6과 같습니다.
->
-> **v2.4.6 흐름 점검 보완**: 결과 창에서 고친 내용을 저장하지 않은 채 다른 파일을 열거나 닫으면 **먼저 묻고**, Windows를 꺼도 **읽던 곳·설정이 남으며**, 저장 중 실패해도 **기존 파일을 잃지 않습니다**. 여러 파일 정리에서 이름이 겹친 결과가 서로 덮어쓰이지 않고, 프로그램은 **한 번에 하나만** 실행됩니다(다시 실행하면 그 창에서 파일을 엶). 문단 정리 결과와 읽기 모드 속도는 v2.4.5와 같습니다.
->
-> **v2.4.5 읽기 모드 목차 보완**: `第一章`·`第十二回`처럼 한자 숫자로 쓴 중국어 원문의 장 제목, `第3卷`·`序章`·`番外`·`プロローグ`, `Chapter One`·`Part II`·`Ep. 5` 같은 영어 제목, `◆ 제3화 ◆`처럼 꾸밈이 붙은 제목도 목차에 나옵니다. v2.4.4에서 나오던 목차는 그대로이며, 문단 정리 결과와 읽기 모드 속도는 v2.4.4와 같습니다.
-> 같은 버전 재배포 보완: 찾은 곳을 **모두 바탕색으로 표시**(지금 고른 곳 파랑, 나머지 노랑, 어두운 배색에 맞춘 색)하고, Notepad++에서는 보이는데 클린리더에서 깨지던 **중국어·일본어 파일**(EUC-JP, GB18030 기호, Big5 확장 글자, 잘린 UTF-8, BOM 없는 UTF-16)을 바르게 엽니다.
-
-
 **정리하고, 바로 읽는다.**
 
 망가진 TXT·EPUB을 깨끗한 문단으로 되살리는 **정리기**와, 그 글을 책처럼 편하게 읽는 **리더기(TXT 뷰어 · 소설 뷰어)** 를<br>
@@ -204,7 +184,7 @@ Instead of blindly removing line breaks, it first analyzes how the whole file br
 - **Encoding auto-detection** — UTF-8, UTF-16, CP949/EUC-KR, Johab, Shift-JIS, EUC-JP, GBK/GB18030, Big5, Windows-1250 to 1258, KOI8-R, Windows-874
 - **Reading mode** — click, Space or the mouse wheel/side buttons to turn pages, timed auto page turning, remembers your reading position and the window position and size, bookmarks, a table of contents that flags missing or duplicated chapter numbers, 9 color schemes (including an e-ink style), paragraph indent, adjustable font, size, line spacing and margins, full-screen mode, dark theme
 - **Find and replace** — a hit list with position, chapter and context; a Korean particle-aware rename option (changing a name also fixes the attached particles such as 은/는 and 이/가 to match the new name); a view that highlights what the cleanup removed or changed
-- **EPUB support** (DRM-free), batch conversion, files up to 100 MB; originals are never modified
+- **Files** — EPUB support (DRM-free), batch conversion, files up to 100 MB, saved in the original encoding; originals are never modified. A recent-files list (20 files, with reading progress) and an option to reopen the last file where you left off
 
 Native C++17 / Win32, a single ~1.5 MB exe — no installation, no runtime dependencies, no network access. Windows 7 or later (64-bit). Download from [Releases](https://github.com/Yamoon-jjang/Yamoon-CleanReader/releases/latest).
 
