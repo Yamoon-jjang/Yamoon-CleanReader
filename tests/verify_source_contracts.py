@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.5.3).
+"""Build-time checks for the current release (v2.5.4).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,10 +23,10 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.5.3"' in main
-assert "FILEVERSION 2,5,3,0" in rc and 'VALUE "ProductVersion", "2.5.3"' in rc
-assert "야문 클린리더 v2.5.3" in manual
-assert "23. v2.5.3" in manual and manual.index("22. v2.5.2") < manual.index("23. v2.5.3")
+assert 'kVersion = L"2.5.4"' in main
+assert "FILEVERSION 2,5,4,0" in rc and 'VALUE "ProductVersion", "2.5.4"' in rc
+assert "야문 클린리더 v2.5.4" in manual
+assert "24. v2.5.4" in manual and manual.index("23. v2.5.3") < manual.index("24. v2.5.4")
 assert "22. v2.5.2" in manual and manual.index("21. v2.5.1") < manual.index("22. v2.5.2")
 assert "20. v2.5.0" in manual and manual.index("19. v2.4.8") < manual.index("20. v2.5.0")
 assert "21. v2.5.1" in manual and manual.index("20. v2.5.0") < manual.index("21. v2.5.1")
@@ -190,11 +190,20 @@ assert "kColorCustom = 9;" in main and "vcolor3" in main and "v3 = v2 == 8 ? kCo
 assert "case WM_XBUTTONUP:\n            return TRUE;" in main
 assert "ShellExecuteW(h, L\"open\", kReleasesUrl" in main                                      # 새 버전 확인: 브라우저로 열기만
 
-# Confirm the engine is exactly the reviewed v2.5.3 blob (v2.5.2 fixShiftedQuotes + a file whose
+# v2.5.4: 상태창·시스템 문구 줄(쌍점 끝 줄, "이름: 값" 항목 줄끼리, 줄표로 감싼 줄)은 잇지 않음,
+#         여러 문단 대사에서 다음 문단을 다시 " 로 여는 한국어 글, 문장 끝 뒤 띄어 쓴 말줄임표, 대사 속 긴 인용 나누기
+eng = (root / "src" / "engine.cpp").read_text(encoding="utf-8")
+assert "bool isDashFramed(const S& t)" in eng and "bool isFieldLine(const S& t)" in eng
+assert "if (isFieldLine(a.t) && isFieldLine(b.t)) return false;" in eng
+assert "dq % 2 == 1) carry = 0;" in eng
+assert "auto dotLike = [](C c)" in eng
+assert "k - o - 1 >= kLongSpeech" in eng
+
+# Confirm the engine is exactly the reviewed v2.5.4 blob (v2.5.2 fixShiftedQuotes + a file whose
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "5529558d6d22b7fadfd34a65fc8a7c1806ab6cca", actual
+assert actual == "c08363fe40b43f44a9fcbdfe5abb942ed58b9956", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -236,4 +245,4 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.5.3 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.5.4 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
