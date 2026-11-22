@@ -537,7 +537,19 @@ std::vector<Range> splitSentences(const S& p, int startQ = 0, bool inSpeech = fa
                 i = qe - 1;
                 continue;
             }
-            if (endOk && !(strong && jamoTail(nextNonWS(after)))) cutAt(nextNonWS(after));
+            if (endOk && !(strong && jamoTail(nextNonWS(after)))) {
+                // 문장 끝 뒤에 띄어 쓴 말줄임표·문장부호만 있는 토막("다음과 같다. ……")은 앞 문장에 붙임 —
+                // 혼자 떨어지면 구분선처럼 보임. 그 뒤에 글이 더 있으면 토막 뒤에서 나눔
+                size_t q = nextNonWS(after), e = q;
+                auto dotLike = [](C c) { return c == '.' || c == 0x2026 || c == 0x2025 || c == '!' || c == '?' || c == 0xFF01 || c == 0xFF1F; };
+                while (e < n && dotLike(p[e])) ++e;
+                if (e > q && (e >= n || isWS(p[e]))) {
+                    if (e < n) cutAt(nextNonWS(e));
+                    i = e - 1;
+                    continue;
+                }
+                cutAt(q);
+            }
         } else if (isOpenQuote(nx) && nx != '\'') {
             cutAt(after);
         } else if (isHangulSyl(nx) && isHangulSyl(before) && (strong && (!onlyOneDot || isEndingSyl(before)))) {
@@ -1405,6 +1417,32 @@ bool isBracketLine(const S& t) {
     C o = v[a], c = v[b - 1];
     return (o == '[' && c == ']') || (o == 0x3010 && c == 0x3011) || (o == 0x3014 && c == 0x3015) || (o == 0xFF3B && c == 0xFF3D);
 }
+// 줄표로 앞뒤를 감싼 줄(게임 시스템 문구 등): ——선택 성공—— / ———맵 입장 중: 거리——
+bool isDashFramed(const S& t) {
+    S v = visText(t);
+    size_t a = 0, b = v.size();
+    while (a < b && isWS(v[a])) ++a;
+    while (b > a && isWS(v[b - 1])) --b;
+    auto dash = [](C c) { return c == 0x2014 || c == 0x2015 || c == 0x2500 || c == 0x2501 || c == '-' || c == '='; };
+    size_t l = a, r = b;
+    while (l < b && dash(v[l])) ++l;
+    while (r > l && dash(v[r - 1])) --r;
+    if (l - a < 2 || b - r < 2 || r <= l) return false;
+    for (size_t k = l; k < r; ++k) if (isLetterDigit(v[k])) return true;
+    return false;
+}
+// "이름: 값" 모양의 항목 줄(상태창·설정표 등): 성별: 여 / 레벨: LV.75 / 주요 스킬: 구두화사, 빙봉구
+// 쌍점 앞 이름이 짧고(1~10자) 문장부호·따옴표가 없으며, 쌍점 뒤는 공백이거나 줄 끝 (12:30 같은 시각은 제외)
+bool isFieldLine(const S& t) {
+    S v = visText(t);
+    size_t a = 0; while (a < v.size() && isWS(v[a])) ++a;
+    size_t c = a;
+    while (c < v.size() && v[c] != ':' && v[c] != 0xFF1A) ++c;
+    if (c == v.size() || c == a || c - a > 10) return false;
+    if (c + 1 < v.size() && !isWS(v[c + 1])) return false;
+    for (size_t k = a; k < c; ++k) if (isTermChar(v[k]) || isOpenQuote(v[k]) || isCloseQuote(v[k]) || v[k] == ',' || isBrOpen(v[k]) || isBrClose(v[k])) return false;
+    return isLetterDigit(v[c - 1]);
+}
 // 짧은 소리·외침 한 마디: "쾅!" "콰앙!!" "쿵!"
 bool isSoundLine(const S& t) {
     S v = visText(t);
@@ -1489,7 +1527,33 @@ std::vector<TM> splitLongSpeech(const TM& x, int startQ) {
     for (size_t k = a; k < b; ++k) if (isHangulSyl(v[k])) { ko = true; break; }
     size_t len = b - a;
     if (len < (ko ? kLongSpeechKo : kLongSpeech)) { out.push_back(x); return out; }
-    std::vector<Range> rs = splitSentences(v.substr(a, b - a), 0, true);
+    S body = v.substr(a, b - a);
+    std::vector<Range> rs = splitSentences(body, 0, true);
+    {
+        // 대사 안에 든 긴 인용('…서약합니다. …따르겠다. …' 같은 200자 넘는 글)도 그 안에서 문장마다 나눔
+        // (짧은 인용은 지금처럼 한 덩어리로 둠). 인용을 여는 따옴표는 첫 조각, 닫는 따옴표와 뒤 서술은 끝 조각에 남음
+        std::vector<char> r2; int e2 = 0;
+        encloseRoles(body, 0, r2, e2);
+        std::vector<Range> more;
+        for (const Range& r : rs) {
+            more.push_back(r);
+            int d = 0; size_t o = 0;
+            for (size_t k = r.a; k < r.a + r.len && k < body.size(); ++k) {
+                if (r2[k] == 1) { if (d++ == 0) o = k; }
+                else if (r2[k] == 2 && d > 0 && --d == 0) {
+                    if (!isBrOpen(body[o]) && k - o - 1 >= kLongSpeech) {
+                        std::vector<Range> in2 = splitSentences(body.substr(o + 1, k - o - 1), 0, true);
+                        if (in2.size() >= 3)
+                            for (size_t q = 1; q < in2.size(); ++q) more.push_back({o + 1 + in2[q].a, 0});
+                    }
+                }
+            }
+        }
+        if (more.size() > rs.size()) {
+            std::sort(more.begin(), more.end(), [](const Range& x1, const Range& x2) { return x1.a < x2.a; });
+            rs.swap(more);
+        }
+    }
     if (!ko && !(len >= kLongSpeech && rs.size() >= 3)) { out.push_back(x); return out; }
     if (ko && rs.size() < 3) { out.push_back(x); return out; }
     size_t prev = 0;
@@ -2047,6 +2111,13 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
         // 앞 줄도 목록 항목이거나 문장이 끝났을 때만
         if (isListItemStart(b.t) && (!isDigit(firstVis(visText(b.t))) || isListItemStart(a.t) || endKind(a.t) != 0)) return false;
         if (!wrap && (notSentence(a) || notSentence(b))) return false;
+        if (!wrap) {
+            // 줄표로 감싼 시스템 문구, 쌍점으로 끝난 줄(…선택해 주세요: / 사우), "이름: 값" 항목 줄끼리는 작가가 일부러 나눈 줄
+            if (isDashFramed(a.t) || isDashFramed(b.t)) return false;
+            C xa = lastVis(a.t);
+            if (xa == ':' || xa == 0xFF1A) return false;
+            if (isFieldLine(a.t) && isFieldLine(b.t)) return false;
+        }
         // 가운데 정렬로 쓴 머리말·경고문 등: 둘 다 크게 들여쓴 줄이고 앞 줄이 조사·연결 어미로 끝나면
         // 한 문장이 줄바꿈된 것 ("수험생에게 / 판매, 대여…", "인한 / 결석이…")
         // 그 밖의 글에서도 조사·연결 어미로 끝난 줄은 문장 중간에서 바뀐 것으로 보고 이음
@@ -2302,6 +2373,16 @@ static std::u32string TidyCore(const std::u32string& in, const TidyOptions& opt,
                 bool west = true;
                 for (C c : vis[i]) if (isHangul(c) || isKanaHan(c)) { west = false; break; }
                 if (west) carry = 0;
+                else {
+                    // 번역 소설에도 같은 관례가 있음: 앞 대사가 문장으로 끝났고(…있습니다.) 이 문단이 " 바로 뒤에 글자가 붙어
+                    // 시작하며 이 문단 안의 곧은 따옴표가 홀수(여는 것 하나가 남음)면 앞 대사를 닫는 따옴표가 아니라 새로 여는 것
+                    const S& pv = vis[openIdx];
+                    C lx = lastVis(pv);
+                    size_t f = 0; while (f < vis[i].size() && isWS(vis[i][f])) ++f;
+                    C nx = f + 1 < vis[i].size() ? vis[i][f + 1] : 0;
+                    int dq = 0; for (C c : vis[i]) if (c == '"') dq++;
+                    if ((isTermChar(lx) || lx == 0x2026) && nx && !isWS(nx) && nx != '"' && !isTermChar(nx) && dq % 2 == 1) carry = 0;
+                }
             }
             if (carry) {
                 // 뒤에서 대사가 닫히는 문단 찾기 (그 사이 문단에는 따옴표가 없어야 함)
