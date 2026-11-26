@@ -2884,10 +2884,29 @@ static std::vector<char> fixedWidthLines(const std::u32string& in) {
 // - 이렇게 볼 때만 설명되는 줄(""대사, "서술…말했다."대사)이 가까이에 둘 이상 있어야 함
 //   (영문식으로 여러 문단 대사를 다시 " 로 여는 글, 짝이 하나 어긋난 보통 글은 건드리지 않음)
 static const size_t kShiftWin = 400;  // 증거를 찾는 범위 (줄 수, 앞뒤)
-static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int>& perm) {
+// qc: 다룰 곧은 따옴표 (" 또는 ') — 두 가지 모두 같은 규칙. 바꿀 곳이 없으면 perm이 비고 빈 글을 돌려줌(큰 글 복사 없음)
+static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int>& perm, C qc = '"') {
     perm.clear();
     size_t n = in.size();
-    if (in.find('"') == std::u32string::npos) return in;
+    if (in.find(qc) == std::u32string::npos) return {};
+    {   // 후보는 줄 첫머리 따옴표뿐 — 그런 줄이 없으면 할 일이 없음 (대부분의 글은 여기서 끝남)
+        bool lead = false;
+        int lastOdd = 0;  // 홑따옴표: 따옴표가 든 바로 앞 줄의 따옴표 수가 홀수(열린 채)일 때만 후보 — 생각 문장('…')이 많은 보통 글은 빨리 끝냄
+        for (size_t a = 0; a < in.size() && !lead;) {
+            size_t f = a;
+            while (f < in.size() && (isWS(in[f]) || in[f] == '\r' || isInvisible(in[f]))) ++f;
+            size_t b = in.find('\n', f);
+            if (f < in.size() && in[f] == qc && (qc != '\'' || lastOdd == 1)) lead = true;
+            if (qc == '\'') {
+                int cnt = 0;
+                for (size_t k = f; k < (b == std::u32string::npos ? in.size() : b); ++k) if (in[k] == qc) cnt++;
+                if (cnt) lastOdd = cnt % 2;
+            }
+            if (b == std::u32string::npos) break;
+            a = b + 1;
+        }
+        if (!lead) return {};
+    }
     auto blank = [](C c) { return isWS(c) || c == '\r' || c == '\n'; };
     struct Cand { size_t line, q; bool plausible, strong; };
     std::vector<Cand> cands;
@@ -2928,12 +2947,19 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
         bool hg = false;
         for (size_t i = fv; i < b; ++i) if (isHangul(in[i])) { hg = true; break; }
         // 둥근 따옴표가 섞인 줄("대사…”)은 곧은 따옴표가 둥근 것과 짝인 경우라 후보에서 뺌
-        if (hg) for (size_t i = fv; i < b; ++i) if (in[i] == 0x201C || in[i] == 0x201D) { hg = false; break; }
+        if (hg) for (size_t i = fv; i < b; ++i) {
+            C x = in[i];
+            if (qc == '"' ? (x == 0x201C || x == 0x201D) : (x == 0x2018 || x == 0x2019)) { hg = false; break; }
+        }
         int ci = -1;          // 이 줄이 후보면 cands 번호
         int rest = 0;         // 후보 줄의 나머지 따옴표 수
         bool bad = false;     // 후보 줄의 나머지가 어색함
         for (size_t i = fv; i < b; ++i) {
-            if (in[i] != '"') continue;
+            if (in[i] != qc) continue;
+            if (qc == '\'') {  // 홑따옴표: 영문 줄임(It's)·숫자 앞('90년대)은 따옴표가 아님
+                C pa = i > fv ? in[i - 1] : 0, na = i + 1 < b ? in[i + 1] : 0;
+                if ((isAsciiAlpha(pa) && isAsciiAlpha(na)) || (isDigit(na) && (i == fv || blank(pa)))) continue;
+            }
             if (i == fv) {
                 // 열린 대사가 서술("~했다.")로 끝난다면 짝이 어긋난 것: 이 따옴표는 새로 여는 것으로 보고 다시 맞춤
                 // 단, 이 따옴표 뒤(줄 끝까지, 다른 따옴표 없이)도 서술로 끝나면 그쪽이 서술 — 앞 대사를 닫는 밀린 따옴표로 봄
@@ -2941,7 +2967,7 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
                 // (서술다운 정도 = 문장 가운데 "~ㅆ다."로 끝나는 문장의 비율, 뒤쪽이 앞 대사보다 서술다우면 닫는 것으로)
                 bool afterNarr = false;
                 {
-                    size_t k = i + 1; while (k < b && in[k] != '"') ++k;
+                    size_t k = i + 1; while (k < b && in[k] != qc) ++k;
                     if (k >= b) {
                         int an = 0, at = 0, pn = 0, pt = 0;
                         narrCount(i + 1, b, an, at);
@@ -2977,11 +3003,11 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
         if (b >= n) break;
         a = b + 1; ++ln;
     }
-    if (cands.empty()) return in;
+    if (cands.empty()) return {};
     {   // 고정폭으로 끊긴 줄의 첫머리는 글 내용과 상관없는 자리 — 거기 놓인 따옴표는 밀린 것이 아님
         std::vector<char> fw = fixedWidthLines(in);
         cands.erase(std::remove_if(cands.begin(), cands.end(), [&](const Cand& cd) { return cd.line < fw.size() && (fw[cd.line] & 2); }), cands.end());
-        if (cands.empty()) return in;
+        if (cands.empty()) return {};
     }
     // 가까이에 이 방식으로만 설명되는 줄이 둘 이상 있고, 어색한 후보보다 충분히 많을 때만 옮김
     std::vector<char> take(cands.size(), 0);
@@ -3003,14 +3029,14 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
             size_t e = cands[k].q;
             while (e > 0 && blank(in[e - 1])) --e;
             size_t v = e; while (v > 0 && isInvisible(in[v - 1])) --v;
-            if (v == 0 || in[v - 1] == '"') continue;
+            if (v == 0 || in[v - 1] == qc) continue;
             bool nl = false;
             for (size_t t = e; t < cands[k].q; ++t) if (in[t] == '\n') { nl = true; break; }
             if (!nl) continue;  // 앞에 줄바꿈이 없음 (글 맨 앞 등)
             take[k] = 1; any = true;
         }
     }
-    if (!any) return in;
+    if (!any) return {};
     std::vector<size_t> insAfter;  // 이 위치 글자 뒤에 따옴표를 넣음 (차례대로)
     std::vector<size_t> from;      // 옮겨 온 따옴표의 원래 위치
     std::vector<char> skip(n, 0);
@@ -3026,7 +3052,80 @@ static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int
     size_t ip = 0;
     for (size_t i = 0; i < n; ++i) {
         if (!skip[i]) { w += in[i]; perm.push_back((int)i); }
-        while (ip < insAfter.size() && insAfter[ip] == i) { w += U'"'; perm.push_back((int)from[ip]); ++ip; }
+        while (ip < insAfter.size() && insAfter[ip] == i) { w += qc; perm.push_back((int)from[ip]); ++ip; }
+    }
+    return w;
+}
+
+// 모양으로 방향이 정해진 따옴표(“” ‘’ 「」 『』)의 닫는 따옴표가 다음 줄 첫머리로 밀린 글 바로잡기
+//   그가 말했다. “벌써 아침이야?        →   그가 말했다. “벌써 아침이야?”
+//   ”그녀가 대답했다. “응, 일곱 시…          그녀가 대답했다. “응, 일곱 시…
+// 곧은 따옴표(fixShiftedQuotes)와 같은 일을 함. 이 따옴표들은 모양으로 닫는 것임을 알 수 있으므로,
+// 앞쪽에서 같은 종류의 대사가 열린 채이고 이 줄의 나머지 짝이 자연스러울 때 앞 내용 줄 끝으로 옮김
+// (사이의 줄바꿈·공백만 자리가 바뀌므로 공백을 뺀 글자 차례는 원문과 같다). 고정폭으로 끊긴 줄의 첫머리는 건드리지 않음
+static std::u32string fixShiftedDirectional(const std::u32string& in, std::vector<int>& perm) {
+    perm.clear();
+    auto openOf = [](C c) -> C { return c == 0x201D ? 0x201C : c == 0x2019 ? 0x2018 : c == 0x300D ? 0x300C : c == 0x300F ? 0x300E : 0; };
+    bool any = false;
+    for (C c : in) if (c == 0x201D || c == 0x2019 || c == 0x300D || c == 0x300F) { any = true; break; }
+    if (!any) return {};
+    auto blank = [](C c) { return isWS(c) || c == '\r' || c == '\n'; };
+    struct Ln { size_t a, b, f, e; };  // 줄 [a,b), 첫·끝 보이는 글자 [f,e)
+    std::vector<Ln> L;
+    for (size_t a = 0; a <= in.size();) {
+        size_t b = in.find('\n', a); if (b == std::u32string::npos) b = in.size();
+        size_t f = a; while (f < b && (blank(in[f]) || isInvisible(in[f]))) ++f;
+        size_t e = b; while (e > f && (blank(in[e - 1]) || isInvisible(in[e - 1]))) --e;
+        L.push_back({a, b, f, e});
+        if (b >= in.size()) break;
+        a = b + 1;
+    }
+    std::vector<char> fw;
+    bool fwDone = false;
+    std::vector<std::pair<size_t, size_t>> moves;  // (앞 줄 끝 글자 위치, 옮길 따옴표 위치)
+    for (size_t k = 1; k < L.size(); ++k) {
+        if (L[k].f >= L[k].e) continue;
+        C c = in[L[k].f];
+        C o = openOf(c);
+        if (!o) continue;
+        size_t q = L[k].f + 1;
+        if (q >= L[k].e) continue;                                   // 따옴표만 있는 줄은 따로 처리됨 (glueLoneQuotes)
+        if (c == 0x2019 && isDigit(in[q])) continue;                 // ’90년대
+        bool hg = false;
+        for (size_t i = L[k].f; i < L[k].e; ++i) if (isHangul(in[i])) { hg = true; break; }
+        if (!hg) continue;
+        // 이 줄의 나머지: 같은 종류 따옴표가 닫는 것부터 나오면 안 됨 (깊이가 음수가 되지 않아야)
+        int d = 0; bool bad = false;
+        for (size_t i = q; i < L[k].e; ++i) { if (in[i] == o) d++; else if (in[i] == c) { if (--d < 0) { bad = true; break; } } }
+        if (bad) continue;
+        // 앞 내용 줄과, 거기서 위로 같은 종류의 대사가 열린 채인가 (40줄 안)
+        size_t P = k;
+        while (P-- > 0) if (L[P].f < L[P].e) break;
+        if (P >= L.size() || L[P].f >= L[P].e) continue;
+        C last = in[L[P].e - 1];
+        if (last == c || last == o) continue;
+        int depth = 0; bool open = false;
+        for (size_t j = P + 1, cnt = 0; j-- > 0 && cnt < 40; ++cnt) {
+            for (size_t i = L[j].e; i-- > L[j].f;) {
+                if (in[i] == c) depth--;
+                else if (in[i] == o) { depth++; if (depth > 0) { open = true; break; } }
+            }
+            if (open || depth < 0) break;
+        }
+        if (!open) continue;
+        if (!fwDone) { fw = fixedWidthLines(in); fwDone = true; }
+        if (k < fw.size() && (fw[k] & 2)) continue;  // 고정폭으로 끊긴 줄의 첫머리
+        moves.push_back({L[P].e - 1, L[k].f});
+    }
+    if (moves.empty()) return {};
+    std::vector<char> skip(in.size(), 0);
+    for (auto& mv : moves) skip[mv.second] = 1;
+    std::u32string w; w.reserve(in.size());
+    perm.reserve(in.size());
+    size_t mi = 0;
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (!skip[i]) { w += in[i]; perm.push_back((int)i); }
+        while (mi < moves.size() && moves[mi].first == i) { w += in[moves[mi].second]; perm.push_back((int)moves[mi].second); ++mi; }
     }
     return w;
 }
@@ -3438,7 +3537,12 @@ static std::u32string normalizeQuotes(const std::u32string& in, std::vector<std:
     conv.erase(std::unique(conv.begin(), conv.end(), [](const std::pair<size_t, C>& a, const std::pair<size_t, C>& b) { return a.first == b.first; }), conv.end());
     return w;
 }
-std::u32string TidyProcess(const std::u32string& in0, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+std::u32string TidyProcess(const std::u32string& inRaw, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
+    // 곧은 홑따옴표(')의 닫는 것이 다음 줄 첫머리로 밀린 글도 큰따옴표와 같은 규칙으로 먼저 바로잡음
+    // (그래야 아래에서 짝을 맞춰 ‘ ’로 보고 큰따옴표 대사처럼 정리함)
+    std::vector<int> permQ;
+    std::u32string inS = fixShiftedQuotes(inRaw, permQ, '\'');
+    const std::u32string& in0 = permQ.empty() ? inRaw : inS;
     std::vector<std::pair<size_t, C>> conv;
     std::u32string inq = normalizeQuotes(in0, conv);
     const std::u32string& in = conv.empty() ? in0 : inq;
@@ -3466,7 +3570,10 @@ std::u32string TidyProcess(const std::u32string& in0, const TidyOptions& opt, Ti
             if (it != conv.end() && it->first == (size_t)m[k]) out[k] = it->second;
         }
     }
-    if (outMap) outMap->swap(m);
+    if (outMap) {
+        if (!permQ.empty()) for (int& v : m) if (v >= 0 && (size_t)v < permQ.size()) v = permQ[v];
+        outMap->swap(m);
+    }
     return out;
 }
 static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
@@ -3505,13 +3612,21 @@ static std::u32string TidySplit(const std::u32string& in, const TidyOptions& opt
     return out;
 }
 static std::u32string TidyWhole(const std::u32string& in, const TidyOptions& opt, TidyReport* rep, std::vector<int>* outMap) {
-    std::vector<int> perm;
-    std::u32string w = fixShiftedQuotes(in, perm);
-    if (perm.empty()) return TidyMixed(in, opt, rep, outMap);
+    // 밀린 닫는 따옴표 바로잡기: 곧은 큰따옴표, 그다음 모양으로 방향이 정해진 따옴표(” ’ 」 』) — 같은 규칙
+    std::vector<int> perm, perm2;
+    std::u32string w1 = fixShiftedQuotes(in, perm);
+    const std::u32string& s1 = perm.empty() ? in : w1;
+    std::u32string w2 = fixShiftedDirectional(s1, perm2);
+    if (perm.empty() && perm2.empty()) return TidyMixed(in, opt, rep, outMap);
+    const std::u32string& w = perm2.empty() ? s1 : w2;
     std::vector<int> m;
     std::u32string out = TidyMixed(w, opt, rep, outMap ? &m : nullptr);
     if (outMap) {
-        for (int& v : m) if (v >= 0 && (size_t)v < perm.size()) v = perm[v];
+        for (int& v : m) {
+            if (v < 0) continue;
+            if (!perm2.empty()) { if ((size_t)v >= perm2.size()) continue; v = perm2[v]; }
+            if (!perm.empty() && (size_t)v < perm.size()) v = perm[v];
+        }
         outMap->swap(m);
     }
     return out;

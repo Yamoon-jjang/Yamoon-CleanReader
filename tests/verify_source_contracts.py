@@ -137,7 +137,7 @@ assert "if (!ended && encQuote && (last == 0x2015 || last == 0x2014 || last == 0
 assert "bool isWeakTerm(C c) {\n    return c == 0x2026 || c == 0x2025 || c == '~'" in engine   # 줄표는 문장 끝 글자가 아님
 assert (root / "tests/cases/dash_end_dialogue/expected.txt").exists()
 # v2.5.2: 닫는 따옴표가 다음 줄 첫머리로 밀린 글은 따옴표를 대사 끝으로 옮김 (줄바꿈 자리만 바뀜)
-assert "static std::u32string fixShiftedQuotes(" in engine and "std::u32string w = fixShiftedQuotes(in, perm);" in engine
+assert "static std::u32string fixShiftedQuotes(" in engine and "std::u32string w1 = fixShiftedQuotes(in, perm);" in engine
 assert "if (open && hg && narrEnd(openAt, i) && !afterNarr) { openAt = i + 1; }" in engine   # 서술로 끝나는 대사 = 짝 어긋남 (뒤쪽이 더 서술다우면 밀린 것)
 assert "strong >= 2 && strong >= badc * 3 && narr * 6 <= sp" in engine                 # 근처 증거가 있을 때만
 assert (root / "tests/cases/shifted_close_quote/expected.txt").exists()
@@ -204,7 +204,7 @@ assert "k - o - 1 >= kLongSpeech" in eng
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "4af7030fba1c4ee4f8ccfab45e7eb3fefc0df590", actual
+assert actual == "dfc8f4f441a62f4b78a5fa3e7e9f1d7133aa366d", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -251,7 +251,7 @@ print("v2.5.5 source contracts (flow fixes) and 600,001 actual hit-index cases: 
 # v2.5.5: 고정폭으로 끊긴 줄은 줄 단위로 미리 나누거나 따옴표를 옮기지 않음 (줄 길이가 바뀌면 끊긴 줄을 못 이음),
 #         문단마다 따로 끊은 글 알아보기, 글자 수로 끊은 일본어·중국어 글, 짝 잃은 따옴표 하나만 따로 두기
 assert "static std::vector<char> fixedWidthLines(const std::u32string& in)" in eng
-assert eng.count("fixedWidthLines(in)") == 2                                                  # 줄 나누기·밀린 따옴표 두 곳
+assert eng.count("fixedWidthLines(in)") == 3                                                  # 줄 나누기·밀린 따옴표(곧은·모양 있는) 세 곳
 assert "return cd.line < fw.size() && (fw[cd.line] & 2);" in eng
 assert "if (fixedLine(L, 3)) continue;" in eng
 assert "if (!glue && !fixedLine(lno))" in eng and "if ((full >= 2 || junction) && !fixedLine(lno))" in eng
@@ -265,3 +265,11 @@ assert "if (carry == 1 ? (d2 % 2 == 1 || firstClose) : (c2 > o2)) { found = true
 for c in ("fixedwidth_dialogue_junction", "paragraph_wrapped_mobile", "shifted_quote_narration_end", "missing_quote_one_line"):
     assert (root / "tests/cases" / c / "expected.txt").exists()
 assert (root / ".github/release-notes/v2.5.5.md").exists()
+
+# v2.5.5 (같은 판 다시 배포): 밀린 닫는 따옴표 바로잡기를 모든 따옴표에 같은 규칙으로 (곧은 " ', 둥근·낫표 ” ’ 」 』)
+assert "static std::u32string fixShiftedQuotes(const std::u32string& in, std::vector<int>& perm, C qc = '\"') {" in eng
+assert "std::u32string inS = fixShiftedQuotes(inRaw, permQ, '\\'');" in eng
+assert "static std::u32string fixShiftedDirectional(const std::u32string& in, std::vector<int>& perm) {" in eng
+assert "std::u32string w2 = fixShiftedDirectional(s1, perm2);" in eng
+assert (root / "tests/cases/shifted_quote_all_kinds/expected.txt").exists()
+assert (root / "tests/cases/apostrophe_not_quote/expected.txt").exists()   # '90년대 · It's · 5'10" 는 따옴표가 아님
