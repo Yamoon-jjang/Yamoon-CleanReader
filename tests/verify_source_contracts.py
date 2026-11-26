@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time checks for the current release (v2.5.4).
+"""Build-time checks for the current release (v2.5.5).
 
 Deliberately do not reimplement the document-cleanup logic here. We enforce
 source-module and version contracts, and compile/run the actual hit-index
@@ -23,9 +23,10 @@ assert search.count("RpHitFrom(") >= 5  # helper + consumers
 assert "static bool RpSearch(" not in main  # only one implementation
 assert "static bool RpSearch(" in search
 assert "void dialogueSep" not in head and "dialogueSep" not in head + main + search + engine
-assert 'kVersion = L"2.5.4"' in main
-assert "FILEVERSION 2,5,4,0" in rc and 'VALUE "ProductVersion", "2.5.4"' in rc
-assert "야문 클린리더 v2.5.4" in manual
+assert 'kVersion = L"2.5.5"' in main
+assert "FILEVERSION 2,5,5,0" in rc and 'VALUE "ProductVersion", "2.5.5"' in rc
+assert "야문 클린리더 v2.5.5" in manual
+assert "25. v2.5.5" in manual and manual.index("24. v2.5.4") < manual.index("25. v2.5.5")
 assert "24. v2.5.4" in manual and manual.index("23. v2.5.3") < manual.index("24. v2.5.4")
 assert "22. v2.5.2" in manual and manual.index("21. v2.5.1") < manual.index("22. v2.5.2")
 assert "20. v2.5.0" in manual and manual.index("19. v2.4.8") < manual.index("20. v2.5.0")
@@ -137,7 +138,7 @@ assert "bool isWeakTerm(C c) {\n    return c == 0x2026 || c == 0x2025 || c == '~
 assert (root / "tests/cases/dash_end_dialogue/expected.txt").exists()
 # v2.5.2: 닫는 따옴표가 다음 줄 첫머리로 밀린 글은 따옴표를 대사 끝으로 옮김 (줄바꿈 자리만 바뀜)
 assert "static std::u32string fixShiftedQuotes(" in engine and "std::u32string w = fixShiftedQuotes(in, perm);" in engine
-assert "if (open && hg && narrEnd(openAt, i)) { openAt = i + 1; }" in engine          # 서술로 끝나는 대사 = 짝 어긋남, 다시 맞춤
+assert "if (open && hg && narrEnd(openAt, i) && !afterNarr) { openAt = i + 1; }" in engine   # 서술로 끝나는 대사 = 짝 어긋남 (뒤쪽이 더 서술다우면 밀린 것)
 assert "strong >= 2 && strong >= badc * 3 && narr * 6 <= sp" in engine                 # 근처 증거가 있을 때만
 assert (root / "tests/cases/shifted_close_quote/expected.txt").exists()
 assert (root / "tests/cases/stray_quote_glued_dialogue/expected.txt").exists()        # 짝 없는 따옴표가 섞인 보통 글은 그대로
@@ -148,7 +149,7 @@ assert "opt.paraSep == 1 ? 1 : 2" in engine                                     
 assert (root / "tests/cases/mixed_blank_styles/expected.txt").exists()
 # v2.5.3: 줄 가운데 붙은 전각 두 칸 들여쓰기·대사 사이 넓은 공백은 먼저 문단 줄바꿈으로 (따옴표 짝을 원문대로)
 assert "static std::u32string splitWideGapLines(" in engine and "std::u32string w = splitWideGapLines(in, perm);" in engine
-assert "if ((j0 || j1 || j2) && cjkLine()) { indent++; runs.push_back({i + 1, j}); continue; }" in engine
+assert "if ((j0 || j1 || j2) && cjkLine() && !fixedLine(lno)) { indent++; runs.push_back({i + 1, j}); continue; }" in engine
 assert (root / "tests/cases/indent_joined_dialogue/expected.txt").exists()
 assert "bool j0 = full >= 1 && j - (i + 1) >= 2;" in engine and "if (indent < 1) return in;" in engine           # 반각 두 칸·영문은 나누지 않음
 assert "if (bl * 100 >= cnt * 15) st[i] = 1;" in engine                                                # 빈 줄로 문단을 나눈 글과 섞여도 나눔
@@ -199,11 +200,11 @@ assert "dq % 2 == 1) carry = 0;" in eng
 assert "auto dotLike = [](C c)" in eng
 assert "k - o - 1 >= kLongSpeech" in eng
 
-# Confirm the engine is exactly the reviewed v2.5.4 blob (v2.5.2 fixShiftedQuotes + a file whose
+# Confirm the engine is exactly the reviewed v2.5.5 blob (v2.5.2 fixShiftedQuotes + a file whose
 # blank-line style changes sharply is split there and each part judged on its own: styleCuts),
 # not just a superficially similar output for a few sample novels.
 actual = subprocess.check_output(["git", "hash-object", "src/engine.cpp"], cwd=root, text=True).strip()
-assert actual == "c08363fe40b43f44a9fcbdfe5abb942ed58b9956", actual
+assert actual == "4af7030fba1c4ee4f8ccfab45e7eb3fefc0df590", actual
 
 name = "static size_t RpHitFrom("
 start = search.index(name)
@@ -245,4 +246,22 @@ with tempfile.TemporaryDirectory() as td:
     cc.write_text(harness, encoding="utf-8")
     subprocess.run(["g++", "-std=c++17", "-O2", "-Wall", "-Wextra", str(cc), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
-print("v2.5.4 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+print("v2.5.5 source contracts (flow fixes) and 600,001 actual hit-index cases: PASS")
+
+# v2.5.5: 고정폭으로 끊긴 줄은 줄 단위로 미리 나누거나 따옴표를 옮기지 않음 (줄 길이가 바뀌면 끊긴 줄을 못 이음),
+#         문단마다 따로 끊은 글 알아보기, 글자 수로 끊은 일본어·중국어 글, 짝 잃은 따옴표 하나만 따로 두기
+assert "static std::vector<char> fixedWidthLines(const std::u32string& in)" in eng
+assert eng.count("fixedWidthLines(in)") == 2                                                  # 줄 나누기·밀린 따옴표 두 곳
+assert "return cd.line < fw.size() && (fw[cd.line] & 2);" in eng
+assert "if (fixedLine(L, 3)) continue;" in eng
+assert "if (!glue && !fixedLine(lno))" in eng and "if ((full >= 2 || junction) && !fixedLine(lno))" in eng
+assert "static bool straightResync(const S& p, int startQ, std::vector<char>& role, bool& inside, size_t& lastOpen, int nq) {" in eng
+assert "straightResync(p, startQ, role, inside, lastOpen, nq);" in eng                        # 문장 나누기
+assert "if (straightResync(t, startQ, rl, ins, lo, dq)) { dqRole.swap(rl); dqOK = true; }" in eng   # 띄어쓰기 다듬기
+assert "if (seqBad < 2) return false;" in eng and "if (cost[m][endSt] + 2 > seqCost) return false;" in eng  # 바른 글은 예전 그대로
+assert "if (cut && !CW && !westText) {" in eng and "if (bc && bs > ws2 && bs >= 8) { CW = bc; W = 0; }" in eng
+assert "N >= 8 && untermN >= 3) {" in eng and "seen.size() >= 6 && cnt * 100 >= N * 4" in eng
+assert "if (carry == 1 ? (d2 % 2 == 1 || firstClose) : (c2 > o2)) { found = true; break; }" in eng
+for c in ("fixedwidth_dialogue_junction", "paragraph_wrapped_mobile", "shifted_quote_narration_end", "missing_quote_one_line"):
+    assert (root / "tests/cases" / c / "expected.txt").exists()
+assert (root / ".github/release-notes/v2.5.5.md").exists()
